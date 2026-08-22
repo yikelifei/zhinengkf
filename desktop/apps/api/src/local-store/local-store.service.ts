@@ -18,6 +18,13 @@ import {
   requestOperationMetadata,
 } from "../shared/operation-idempotency";
 import { assertNotificationEffectReplay } from "../shared/notification-idempotency";
+import { appConfig } from "../shared/app-config";
+import {
+  conversationTimelineTaskPartStatus,
+  conversationTimelineTaskParts,
+  conversationTimelineMessagePresentation,
+  normalizeConversationTimelineAttachments,
+} from "../shared/conversation-message-presentation";
 
 const {
   buildOrderDraftFromQuote,
@@ -39,6 +46,8 @@ const {
   validateOrderDraftQuoteBinding,
   validateQuoteDraftIdentity,
   validateSendTaskBinding,
+  validateCustomerSelectionPageProofs,
+  getToolDefinition,
 } = require(path.join(process.cwd(), "packages", "rules"));
 
 type StoreData = {
@@ -68,9 +77,14 @@ type StoreData = {
   trainingSamples: any[];
   knowledgeEntries: any[];
   routeEvaluations: any[];
+  agentTasks: any[];
+  agentTaskSteps: any[];
+  agentTaskApprovals: any[];
+  agentTaskToolExecutions: any[];
   automationRuns: any[];
   wechatWorkBindings: any[];
   wechatWorkAuditLogs: any[];
+  wechatWorkCustomerUpgrades: any[];
   wechatWorkSyncCursors: any[];
   personalWechatRpaBindings: any[];
   personalWechatRpaAuditLogs: any[];
@@ -384,6 +398,28 @@ export class LocalStoreService {
     });
     this.write(data);
     return data.skus[index];
+  }
+
+  deleteSku(skuCode: string, context: Record<string, unknown> = {}) {
+    const data = this.read();
+    const index = data.skus.findIndex((sku) => sku.skuCode === skuCode);
+    if (index < 0) throw new Error(`local sku not found: ${skuCode}`);
+    const previous = data.skus[index];
+    data.skus.splice(index, 1);
+    const assetCountBefore = data.designAssets.length;
+    data.designAssets = data.designAssets.filter((asset) =>
+      !(asset.ownerType === "sku" && asset.ownerId === skuCode),
+    );
+    this.recordSkuDeleteLog(data, previous, {
+      source: context.source || "manual_delete",
+      operator: context.operator,
+      reason: context.reason || "删除商品",
+    });
+    this.write(data);
+    return {
+      deletedSku: previous,
+      removedAssetCount: assetCountBefore - data.designAssets.length,
+    };
   }
 
   batchUpdateSkus(skuCodes: string[], patch: Record<string, unknown>, context: Record<string, unknown> = {}) {
@@ -1572,6 +1608,7 @@ export class LocalStoreService {
     feedback: string;
     recoveryEffect: Record<string, unknown>;
     highValueAmountCny?: number;
+    businessRiskControlsDisabled?: boolean;
   }) {
     return this.withStoreLock(() => {
     const data = this.read();
@@ -1629,12 +1666,16 @@ export class LocalStoreService {
       const quantity = Number(job.budget?.quantity || 1);
       const totalPrice = totals.salePrice * quantity;
       const totalCost = totals.cost * quantity;
+      const businessRiskDisabled = payload.businessRiskControlsDisabled === true;
       const highValueAmount = Number(payload.highValueAmountCny || 10000);
       const highValueQuote =
-        job.isHighValue ||
-        isHighValueBudget(job.budget, highValueAmount) ||
-        (Number.isFinite(totalPrice) && totalPrice >= highValueAmount) ||
-        (Number.isFinite(totals.salePrice) && totals.salePrice >= highValueAmount);
+        !businessRiskDisabled && (
+          job.isHighValue ||
+          isHighValueBudget(job.budget, highValueAmount) ||
+          (Number.isFinite(totalPrice) && totalPrice >= highValueAmount) ||
+          (Number.isFinite(totals.salePrice) && totals.salePrice >= highValueAmount)
+        );
+      const bundleAutomationReady = businessRiskDisabled || inspectBundleAutomationReadiness(job.bundle || {}).ok;
       quote = {
         id: id("quote"),
         designJobId: job.id,
@@ -1645,7 +1686,7 @@ export class LocalStoreService {
         totalPrice,
         totalCost,
         profit: totalPrice - totalCost,
-        status: highValueQuote || !inspectBundleAutomationReadiness(job.bundle || {}).ok ? "manual_review" : "auto_sent",
+        status: highValueQuote || !bundleAutomationReady ? "manual_review" : "auto_sent",
         paymentStatus: "unpaid",
         sendTaskId: null,
         customerNotes: "客户在会话中选择了这张效果图，系统已绑定为报价图片。",
@@ -1770,37 +1811,62 @@ export class LocalStoreService {
     const messages = data.messages
       .filter((message) => message.conversationId === identity.conversationId)
       .filter((message) => isTrustedConversationMessage(message, rpaMessageIds))
-      .map((message) => ({
-        ...message,
-        source: "message",
-        customerId: identity.customerId,
-        wechatAccountId: identity.wechatAccountId,
-        status: message.direction === "inbound" ? (message.readAt ? "read" : "unread") : "sent",
-        attachments: normalizeTimelineAttachments(message.attachments, message.readAt ? "read" : "received"),
-      }));
+      .map((message) => {
+        const presentation = conversationTimelineMessagePresentation(message);
+        return {
+          ...message,
+          source: "message",
+          customerId: identity.customerId,
+          wechatAccountId: identity.wechatAccountId,
+          text: presentation.displayText,
+          messageType: presentation.messageType,
+          content: presentation.content,
+          status: message.direction === "inbound" ? (message.readAt ? "read" : "unread") : "sent",
+          attachments: normalizeConversationTimelineAttachments(message.attachments, message.readAt ? "read" : "received"),
+        };
+      });
     const outbound = data.sendTasks
       .filter((task) => task.conversationId === identity.conversationId)
       .filter((task) => !isSyntheticConversationText(task.payload?.text || task.payload?.textBeforeImages))
-      .map((task) => ({
-        id: `send-task:${task.id}`,
-        source: "send_task",
-        sendTaskId: task.id,
-        conversationId: identity.conversationId,
-        customerId: identity.customerId,
-        wechatAccountId: identity.wechatAccountId,
-        direction: "outbound",
-        text: String(task.payload?.text || task.payload?.textBeforeImages || ""),
-        attachments: timelineTaskAttachments(task, data.designAssets),
-        status: task.status || "queued",
-        errorMessage: task.errorMessage || "",
-        createdAt: task.queuedAt || task.createdAt,
-        updatedAt: task.updatedAt || task.createdAt,
-        sentAt: task.sentAt || null,
-        metadata: {
-          kind: task.payload?.kind || "text",
-          manualReply: task.payload?.source === "manual_reply",
-        },
-      }));
+      .flatMap((task) => {
+        const parts = conversationTimelineTaskParts(task.payload);
+        const latestAttempt = data.sendAttempts
+          .filter((attempt) => attempt.sendTaskId === task.id)
+          .sort((left, right) => String(right.startedAt || right.createdAt || "").localeCompare(String(left.startedAt || left.createdAt || "")))[0];
+        const base = {
+          source: "send_task",
+          sendTaskId: task.id,
+          conversationId: identity.conversationId,
+          customerId: identity.customerId,
+          wechatAccountId: identity.wechatAccountId,
+          direction: "outbound",
+          status: task.status || "queued",
+          errorMessage: task.errorMessage || "",
+          createdAt: task.queuedAt || task.createdAt,
+          updatedAt: task.updatedAt || task.createdAt,
+          sentAt: task.sentAt || null,
+          metadata: { kind: task.payload?.kind || "text", manualReply: task.payload?.source === "manual_reply" },
+        };
+        if (!parts.length) return [{
+          ...base,
+          id: `send-task:${task.id}`,
+          text: String(task.payload?.text || task.payload?.textBeforeImages || ""),
+          attachments: timelineTaskAttachments(task, data.designAssets),
+        }];
+        return parts.map((part, index) => {
+          const partStatus = conversationTimelineTaskPartStatus(task.status, latestAttempt?.metadata, index);
+          return {
+            ...base,
+            id: `send-task:${task.id}:${String(index + 1).padStart(2, "0")}`,
+            text: part.text,
+            messageType: part.messageType,
+            content: part.content,
+            status: partStatus,
+            errorMessage: partStatus === "sent" ? "" : base.errorMessage,
+            attachments: normalizeConversationTimelineAttachments(part.attachments, partStatus),
+          };
+        });
+      });
     return [...messages, ...outbound]
       .sort((left, right) => {
         const byTime = String(left.createdAt || "").localeCompare(String(right.createdAt || ""));
@@ -3334,6 +3400,269 @@ export class LocalStoreService {
     return { ...record, agent: agent || null };
   }
 
+  listAgentTasks(filter: IdentityListFilter & { status?: string; limit?: number } = {}) {
+    const status = String(filter.status || "").trim();
+    const limit = Math.max(1, Math.min(Number(filter.limit || 100), 500));
+    const data = this.read();
+    return data.agentTasks
+      .filter((task) => this.matchesIdentityFilter(task, filter))
+      .filter((task) => !status || String(task.status || "") === status)
+      .sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)))
+      .slice(0, limit)
+      .map((task) => this.hydrateAgentTask(data, task));
+  }
+
+  getAgentTask(taskId: string) {
+    const data = this.read();
+    const task = data.agentTasks.find((item) => item.id === String(taskId || ""));
+    return task ? this.hydrateAgentTask(data, task) : null;
+  }
+
+  createAgentTask(payload: any = {}) {
+    const data = this.read();
+    const operationKey = normalizeOperationKey(payload.operationKey || payload.id || "agent-task", "agent task operationKey");
+    const taskId = String(payload.id || deterministicOperationId("agent_task", operationKey));
+    const existing = data.agentTasks.find((task) => task.id === taskId || task.operationKey === operationKey);
+    if (existing) {
+      if (String(existing.operationKey || "") !== operationKey) {
+        throw new BadRequestException(`agent task replay changed operationKey: ${operationKey}`);
+      }
+      assertAgentTaskReplay(existing, payload, operationKey);
+      return this.hydrateAgentTask(data, existing);
+    }
+    const now = new Date().toISOString();
+    const record = {
+      id: taskId,
+      operationKey,
+      status: String(payload.status || "created"),
+      taskType: String(payload.taskType || "customer_service"),
+      lane: payload.lane || null,
+      routeAction: payload.routeAction || null,
+      planType: payload.planType || null,
+      reason: payload.reason || null,
+      objective: payload.objective || null,
+      wechatAccountId: payload.identity?.wechatAccountId || payload.wechatAccountId || null,
+      conversationId: payload.identity?.conversationId || payload.conversationId || null,
+      customerId: payload.identity?.customerId || payload.customerId || null,
+      routeId: payload.createdFrom?.routeId || payload.routeId || null,
+      inboundMessageId: payload.createdFrom?.inboundMessageId || payload.inboundMessageId || null,
+      currentStep: payload.nextStep || payload.currentStep || null,
+      payload: payload.payload || payload,
+      handoff: payload.handoff || null,
+      errorCode: null,
+      errorMessage: null,
+      completedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    data.agentTasks.push(record);
+    for (const step of Array.isArray(payload.steps) ? payload.steps : []) {
+      data.agentTaskSteps.push({
+        id: deterministicOperationId("agent_step", `${taskId}:${String(step.key || "step")}`),
+        taskId,
+        stepKey: String(step.key || "step"),
+        status: String(step.status || "planned"),
+        mode: step.mode || null,
+        toolName: step.tool || step.toolName || null,
+        idempotencyKey: step.idempotencyKey || null,
+        input: step.input || null,
+        output: step.output || null,
+        errorCode: null,
+        errorMessage: null,
+        startedAt: null,
+        completedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+      const toolName = String(step.tool || step.toolName || "").trim();
+      if (toolName) {
+        const definition = getToolDefinition(toolName) || {};
+        const toolOperationKey = `${operationKey}:${String(step.key || "step")}:tool`;
+        data.agentTaskToolExecutions.push({
+          id: deterministicOperationId("agent_tool_execution", toolOperationKey),
+          taskId,
+          stepKey: String(step.key || "step"),
+          operationKey: toolOperationKey,
+          toolName,
+          toolVersion: String(definition.version || "1"),
+          effect: String(definition.effect || "unknown"),
+          capability: definition.requiredCapability || null,
+          status: String(step.status || "planned") === "completed" ? "succeeded" : "planned",
+          idempotencyKey: step.idempotencyKey || null,
+          input: step.input || null,
+          output: step.output || null,
+          errorCode: null,
+          errorMessage: null,
+          startedAt: null,
+          completedAt: null,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+    }
+    if (record.status === "awaiting_approval") {
+      data.agentTaskApprovals.push({
+        id: deterministicOperationId("agent_approval", taskId),
+        taskId,
+        status: "pending",
+        policy: String(payload.approvalPolicy || payload.approval?.policy || "human"),
+        requestedBy: String(payload.approval?.requestedBy || "agent"),
+        reviewer: null,
+        decisionNote: null,
+        metadata: payload.approval?.metadata || { reason: record.reason, lane: record.lane },
+        requestedAt: now,
+        decidedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    this.write(data);
+    return this.hydrateAgentTask(data, record);
+  }
+
+  updateAgentTask(taskId: string, patch: any = {}) {
+    const data = this.read();
+    const index = data.agentTasks.findIndex((task) => task.id === String(taskId || ""));
+    if (index < 0) throw new NotFoundException(`agent task not found: ${taskId}`);
+    const current = data.agentTasks[index];
+    const next = {
+      ...current,
+      ...patch,
+      id: current.id,
+      operationKey: current.operationKey,
+      updatedAt: new Date().toISOString(),
+    };
+    if (patch.status && ["succeeded", "failed", "unknown_outcome"].includes(String(patch.status))) {
+      next.completedAt = next.completedAt || next.updatedAt;
+    }
+    data.agentTasks[index] = next;
+    this.write(data);
+    return this.hydrateAgentTask(data, next);
+  }
+
+  createAgentTaskApproval(taskId: string, payload: any = {}) {
+    return this.withWriteTransaction(() => {
+      const data = this.read();
+      const task = data.agentTasks.find((item) => item.id === String(taskId || ""));
+      if (!task) throw new NotFoundException(`agent task not found: ${taskId}`);
+      const approvalKey = normalizeOperationKey(
+        payload.operationKey || `${task.id}:${String(payload.toolExecutionId || "tool")}`,
+        "agent task approval operationKey",
+      );
+      const approvalId = String(payload.id || deterministicOperationId("agent_approval", approvalKey));
+      const existing = data.agentTaskApprovals.find((item) => item.id === approvalId);
+      if (existing) return this.hydrateAgentTask(data, task);
+      const now = new Date().toISOString();
+      data.agentTaskApprovals.push({
+        id: approvalId,
+        taskId: task.id,
+        status: "pending",
+        policy: String(payload.policy || "human"),
+        requestedBy: String(payload.requestedBy || "agent"),
+        reviewer: null,
+        decisionNote: null,
+        metadata: payload.metadata || {},
+        requestedAt: now,
+        decidedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+      task.status = "awaiting_approval";
+      task.currentStep = String(payload.currentStep || `approval.${String(payload.toolExecutionId || "tool")}`);
+      task.completedAt = null;
+      task.errorCode = null;
+      task.errorMessage = null;
+      task.updatedAt = now;
+      this.write(data);
+      return this.hydrateAgentTask(data, task);
+    });
+  }
+
+  decideAgentTaskApproval(taskId: string, approvalId: string, payload: any = {}) {
+    return this.withWriteTransaction(() => {
+      const data = this.read();
+      const task = data.agentTasks.find((item) => item.id === String(taskId || ""));
+      if (!task) throw new NotFoundException(`agent task not found: ${taskId}`);
+      const approval = data.agentTaskApprovals.find(
+        (item) => item.id === String(approvalId || "") && item.taskId === task.id,
+      );
+      if (!approval) throw new NotFoundException(`agent task approval not found: ${approvalId}`);
+      const decision = String(payload.decision || "").trim().toLowerCase();
+      if (!["approved", "rejected"].includes(decision)) {
+        throw new BadRequestException("agent task approval decision must be approved or rejected");
+      }
+      if (approval.status !== "pending") {
+        if (approval.status === decision) return this.hydrateAgentTask(data, task);
+        throw new ConflictException("agent task approval has already been decided");
+      }
+      const now = new Date().toISOString();
+      approval.status = decision;
+      approval.reviewer = String(payload.reviewer || "人工客服");
+      approval.decisionNote = String(payload.note || "").trim() || null;
+      approval.decidedAt = now;
+      approval.updatedAt = now;
+      for (const step of data.agentTaskSteps.filter((item) => item.taskId === task.id && item.mode === "approval" && item.status === "pending")) {
+        step.status = decision;
+        step.updatedAt = now;
+        step.completedAt = now;
+      }
+      task.status = decision === "approved" ? "ready" : "failed";
+      task.currentStep = decision === "approved" ? "reply.compose" : "approval.rejected";
+      task.errorMessage = decision === "rejected" ? `审批拒绝${approval.decisionNote ? `：${approval.decisionNote}` : ""}` : null;
+      task.updatedAt = now;
+      if (decision === "rejected") task.completedAt = now;
+      this.write(data);
+      return this.hydrateAgentTask(data, task);
+    });
+  }
+
+  listAgentTaskToolExecutions(filter: IdentityListFilter & { taskId?: string; status?: string; limit?: number } = {}) {
+    const data = this.read();
+    const status = String(filter.status || "").trim();
+    const limit = Math.max(1, Math.min(Number(filter.limit || 100), 500));
+    const taskIds = data.agentTasks
+      .filter((task) => this.matchesIdentityFilter(task, filter))
+      .map((task) => task.id);
+    return data.agentTaskToolExecutions
+      .filter((execution) => (!filter.taskId || execution.taskId === filter.taskId) && taskIds.includes(execution.taskId))
+      .filter((execution) => !status || String(execution.status || "") === status)
+      .sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)))
+      .slice(0, limit);
+  }
+
+  getAgentTaskToolExecution(id: string) {
+    return this.read().agentTaskToolExecutions.find((execution) => execution.id === String(id || "")) || null;
+  }
+
+  updateAgentTaskToolExecution(id: string, patch: any = {}) {
+    const data = this.read();
+    const index = data.agentTaskToolExecutions.findIndex((execution) => execution.id === String(id || ""));
+    if (index < 0) throw new NotFoundException(`agent task tool execution not found: ${id}`);
+    const current = data.agentTaskToolExecutions[index];
+    const next = { ...current, ...patch, id: current.id, operationKey: current.operationKey, updatedAt: new Date().toISOString() };
+    if (patch.status && ["succeeded", "failed", "unknown_outcome", "previewed", "verified"].includes(String(patch.status))) {
+      next.completedAt = next.completedAt || next.updatedAt;
+    }
+    data.agentTaskToolExecutions[index] = next;
+    this.write(data);
+    return next;
+  }
+
+  private hydrateAgentTask(data: StoreData, task: any) {
+    return {
+      ...task,
+      steps: data.agentTaskSteps
+        .filter((step) => step.taskId === task.id)
+        .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))),
+      approvals: data.agentTaskApprovals
+        .filter((approval) => approval.taskId === task.id)
+        .sort((a, b) => String(b.requestedAt).localeCompare(String(a.requestedAt))),
+      toolExecutions: data.agentTaskToolExecutions
+        .filter((execution) => execution.taskId === task.id)
+        .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))),
+    };
+  }
+
   getRouteEvaluation(id: string) {
     const data = this.read();
     const route = data.routeEvaluations.find((item) => item.id === id);
@@ -3777,30 +4106,74 @@ export class LocalStoreService {
     taskId: string;
     taskPatch: any;
     attempt: any;
+    claimGuard?: {
+      requireAccountQueueHead?: boolean;
+      wechatAccountId?: string;
+      conversationId?: string;
+      customerId?: string;
+      latestInboundMessageId?: string;
+    };
   }) {
-    const data = this.read();
-    const taskIndex = data.sendTasks.findIndex((item) => item.id === params.taskId);
-    if (taskIndex < 0 || data.sendTasks[taskIndex].status !== "queued") return null;
+    return this.withWriteTransaction(() => {
+      const data = this.read();
+      const taskIndex = data.sendTasks.findIndex((item) => item.id === params.taskId);
+      if (taskIndex < 0 || data.sendTasks[taskIndex].status !== "queued") return null;
 
-    const now = new Date().toISOString();
-    const nextTask = {
-      ...data.sendTasks[taskIndex],
-      ...params.taskPatch,
-      updatedAt: now,
-    };
-    const attempt = this.buildSendAttemptRecord({
-      ...params.attempt,
-      sendTaskId: params.taskId,
-    }, now);
-    this.validateSendAttemptBinding(data, attempt);
+      const currentTask = data.sendTasks[taskIndex];
+      const guard = params.claimGuard || {};
+      const conversation = data.conversations.find((item) => item.id === currentTask.conversationId) || null;
+      if (
+        (guard.wechatAccountId && currentTask.wechatAccountId !== guard.wechatAccountId)
+        || (guard.conversationId && currentTask.conversationId !== guard.conversationId)
+        || (guard.customerId && String(conversation?.customerId || "") !== guard.customerId)
+      ) return null;
+      if (guard.requireAccountQueueHead) {
+        const anotherSendingTask = data.sendTasks.find((item) => (
+          item.id !== currentTask.id
+          && item.wechatAccountId === currentTask.wechatAccountId
+          && item.status === "sending"
+        ));
+        if (anotherSendingTask) return null;
+        const queueHead = data.sendTasks
+          .filter((item) => item.wechatAccountId === currentTask.wechatAccountId && item.status === "queued")
+          .sort((left, right) => (
+            String(left.queuedAt || left.createdAt || "").localeCompare(String(right.queuedAt || right.createdAt || ""))
+            || String(left.createdAt || "").localeCompare(String(right.createdAt || ""))
+            || String(left.id || "").localeCompare(String(right.id || ""))
+          ))[0];
+        if (!queueHead || queueHead.id !== currentTask.id) return null;
+      }
+      if (guard.latestInboundMessageId) {
+        const latestInbound = data.messages
+          .map((message, index) => ({ message, index }))
+          .filter(({ message }) => message.conversationId === currentTask.conversationId && message.direction === "inbound")
+          .sort((left, right) => (
+            Date.parse(String(right.message.createdAt || "")) - Date.parse(String(left.message.createdAt || ""))
+            || right.index - left.index
+          ))[0]?.message;
+        if (!latestInbound || String(latestInbound.id || "") !== guard.latestInboundMessageId) return null;
+      }
 
-    data.sendTasks[taskIndex] = nextTask;
-    data.sendAttempts.push(attempt);
-    this.write(data);
-    return {
-      task: this.hydrateSendTask(data, nextTask),
-      attempt: this.hydrateSendAttempt(data, attempt),
-    };
+      const now = new Date().toISOString();
+      const nextTask = {
+        ...currentTask,
+        ...params.taskPatch,
+        updatedAt: now,
+      };
+      const attempt = this.buildSendAttemptRecord({
+        ...params.attempt,
+        sendTaskId: params.taskId,
+      }, now);
+      this.validateSendAttemptBinding(data, attempt);
+
+      data.sendTasks[taskIndex] = nextTask;
+      data.sendAttempts.push(attempt);
+      this.write(data);
+      return {
+        task: this.hydrateSendTask(data, nextTask),
+        attempt: this.hydrateSendAttempt(data, attempt),
+      };
+    });
   }
 
   completeSendAttemptAndTask(params: {
@@ -3923,6 +4296,8 @@ export class LocalStoreService {
     const isManualAttachmentReply = payload.payload?.source === "manual_reply"
       && payload.payload?.manualReply === true
       && payload.guardSnapshot?.manualReply === true;
+    const isCustomerSelectionPageReply = payload.payload?.kind === "material_page_recommendations"
+      && payload.guardSnapshot?.customerSelectionDelivery?.kind === "material_page_images";
     let normalizedExpectedPaths: Set<string>;
     if (isManualAttachmentReply) {
       const assetIds = Array.isArray(payload.payload?.assetIds)
@@ -3946,6 +4321,30 @@ export class LocalStoreService {
       if (filePaths.some((filePath: string) => !normalizedExpectedPaths.has(normalizePathKey(filePath)))) {
         throw new Error("send task file binding invalid: file paths do not belong to manual reply assets");
       }
+    } else if (isCustomerSelectionPageReply) {
+      const pageProofs = Array.isArray(payload.payload?.customerSelectionPageProofs)
+        ? payload.payload.customerSelectionPageProofs
+        : [];
+      const registered = validateCustomerSelectionPageProofs({ sourceImagePaths, proofs: pageProofs });
+      if (!registered?.ok) {
+        throw new Error(`send task image binding invalid: ${registered?.reason || "customer selection page proof failed"}`);
+      }
+      const storageRoot = fs.realpathSync(path.resolve(appConfig.localStorageRoot));
+      sourceImagePaths.forEach((sourcePath, index) => {
+        if (!fs.existsSync(sourcePath) || !fs.lstatSync(sourcePath).isFile()) {
+          throw new Error("send task image binding invalid: customer selection page source is missing");
+        }
+        const realSourcePath = fs.realpathSync(sourcePath);
+        const relative = path.relative(storageRoot, realSourcePath);
+        if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+          throw new Error("send task image binding invalid: customer selection page escaped local storage");
+        }
+        const fingerprint = createHash("sha256").update(fs.readFileSync(realSourcePath)).digest("hex");
+        if (fingerprint !== String(pageProofs[index]?.imageSha256 || "").toLowerCase()) {
+          throw new Error("send task image binding invalid: customer selection page fingerprint changed");
+        }
+      });
+      normalizedExpectedPaths = new Set(sourceImagePaths.map((imagePath) => normalizePathKey(imagePath)));
     } else {
       if (!payload.designJobId) throw new Error("send task image binding invalid: designJobId is required for image payload");
       normalizedExpectedPaths = new Set(
@@ -3957,7 +4356,7 @@ export class LocalStoreService {
     }
     const invalidSourcePaths = sourceImagePaths.filter((imagePath) => !normalizedExpectedPaths.has(normalizePathKey(imagePath)));
     if (invalidSourcePaths.length) {
-      throw new Error(`send task image binding invalid: image paths do not belong to design job`);
+      throw new Error(`send task image binding invalid: image paths do not belong to their approved source`);
     }
     const proofs = Array.isArray(payload.guardSnapshot?.imageOptimization)
       ? payload.guardSnapshot.imageOptimization
@@ -4113,6 +4512,38 @@ export class LocalStoreService {
       if (snapshot.wechatAccountId && task.wechatAccountId && snapshot.wechatAccountId !== task.wechatAccountId) {
         throw new Error(`send attempt binding invalid: window snapshot account does not match send task`);
       }
+    }
+  }
+
+  private recordSkuDeleteLog(
+    data: StoreData,
+    before: Record<string, unknown>,
+    context: { source?: unknown; operator?: unknown; reason?: unknown } = {},
+  ) {
+    const now = new Date().toISOString();
+    data.skuChangeLogs.push({
+      id: id("sku_log"),
+      skuId: before.id || null,
+      skuCode: before.skuCode || "",
+      name: before.name || "",
+      action: "delete",
+      source: String(context.source || "manual_delete"),
+      operator: String(context.operator || "system"),
+      reason: String(context.reason || "删除商品"),
+      changedFields: SKU_TRACKED_FIELDS
+        .filter((field) => before[field] !== undefined)
+        .map((field) => ({ field, before: before[field] ?? null, after: null })),
+      before: pickSkuSnapshot(before),
+      after: {
+        skuCode: before.skuCode || "",
+        deleted: true,
+      },
+      createdAt: now,
+    });
+    if (data.skuChangeLogs.length > 1000) {
+      data.skuChangeLogs = data.skuChangeLogs
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+        .slice(0, 1000);
     }
   }
 
@@ -4550,6 +4981,130 @@ export class LocalStoreService {
     return record;
   }
 
+  getWechatWorkCustomerUpgrade(idValue: string) {
+    const recordId = String(idValue || "").trim();
+    if (!recordId) return null;
+    return this.read().wechatWorkCustomerUpgrades.find((item) => item.id === recordId) || null;
+  }
+
+  findWechatWorkCustomerUpgradeByState(stateValue: string) {
+    const state = String(stateValue || "").trim();
+    if (!state) return null;
+    return this.read().wechatWorkCustomerUpgrades.find((item) => item.state === state) || null;
+  }
+
+  findWechatWorkCustomerUpgradeByMsgId(msgidValue: string) {
+    const msgid = String(msgidValue || "").trim();
+    if (!msgid) return null;
+    return this.read().wechatWorkCustomerUpgrades.find(
+      (item) => item.textMsgId === msgid || item.imageMsgId === msgid,
+    ) || null;
+  }
+
+  findPendingWechatWorkCustomerUpgrade(openKfidValue: string, externalUserIdValue: string) {
+    const openKfid = String(openKfidValue || "").trim();
+    const externalUserId = String(externalUserIdValue || "").trim();
+    if (!openKfid || !externalUserId) return null;
+    return this.read().wechatWorkCustomerUpgrades
+      .filter((item) => (
+        item.openKfid === openKfid
+        && item.externalUserId === externalUserId
+        && ["partial", "failed", "async_failed"].includes(String(item.status || ""))
+        && String(item.imageStatus || "") !== "api_accepted"
+      ))
+      .sort((left, right) => Date.parse(String(right.updatedAt || right.createdAt || 0))
+        - Date.parse(String(left.updatedAt || left.createdAt || 0)))[0] || null;
+  }
+
+  claimWechatWorkCustomerUpgrade(payload: Record<string, unknown>) {
+    return this.withWriteTransaction(() => {
+      const recordId = String(payload.id || "").trim();
+      const claimToken = String(payload.claimToken || "").trim();
+      if (!recordId || !claimToken) throw new BadRequestException("customer upgrade claim requires id and claimToken");
+      const data = this.read();
+      const index = data.wechatWorkCustomerUpgrades.findIndex((item) => item.id === recordId);
+      const existing = index >= 0 ? data.wechatWorkCustomerUpgrades[index] : null;
+      if (existing && ["ready", "queued", "sending", "partial", "api_accepted", "async_failed", "half_added_pending", "identity_unverified", "added_confirmed"].includes(String(existing.status || ""))) {
+        return { mode: "resume", record: existing };
+      }
+      const now = new Date();
+      if (
+        existing?.status === "creating"
+        && String(existing.claimToken || "") !== claimToken
+        && Date.parse(String(existing.claimExpiresAt || "")) > now.getTime()
+      ) {
+        return { mode: "in_progress", record: existing };
+      }
+      for (const item of data.wechatWorkCustomerUpgrades) {
+        if (
+          item.id !== recordId
+          && String(item.openKfid || "") === String(payload.openKfid || "")
+          && String(item.externalUserId || "") === String(payload.externalUserId || "")
+          && ["creating", "ready", "queued", "sending", "partial", "failed", "async_failed", "api_accepted", "half_added_pending"].includes(String(item.status || ""))
+        ) {
+          item.status = "superseded";
+          item.errorMessage = "客户已选择新的长期服务专员，此二维码不再自动恢复。";
+          item.claimToken = null;
+          item.claimExpiresAt = null;
+          item.version = Math.max(0, Number(item.version || 0)) + 1;
+          item.updatedAt = now.toISOString();
+        }
+      }
+      const record = {
+        ...(existing || {}),
+        ...payload,
+        id: recordId,
+        status: "creating",
+        claimToken,
+        claimExpiresAt: new Date(now.getTime() + 2 * 60 * 1000).toISOString(),
+        version: Math.max(0, Number(existing?.version || 0)) + 1,
+        createdAt: existing?.createdAt || now.toISOString(),
+        updatedAt: now.toISOString(),
+      };
+      if (index >= 0) data.wechatWorkCustomerUpgrades[index] = record;
+      else data.wechatWorkCustomerUpgrades.push(record);
+      this.write(data);
+      return { mode: "claimed", record };
+    });
+  }
+
+  updateWechatWorkCustomerUpgrade(
+    idValue: string,
+    patch: Record<string, unknown>,
+    expected: { claimToken?: string; version?: number } = {},
+  ) {
+    return this.withWriteTransaction(() => {
+      const recordId = String(idValue || "").trim();
+      const data = this.read();
+      const index = data.wechatWorkCustomerUpgrades.findIndex((item) => item.id === recordId);
+      if (index < 0) return null;
+      const current = data.wechatWorkCustomerUpgrades[index];
+      if (expected.claimToken && current.claimToken !== expected.claimToken) return null;
+      if (expected.version != null && Number(current.version || 0) !== Number(expected.version)) return null;
+      const keepConfirmed = current.status === "added_confirmed" && patch.status !== "added_confirmed";
+      const record = {
+        ...current,
+        ...patch,
+        ...(keepConfirmed ? { status: "added_confirmed" } : {}),
+        id: current.id,
+        corpId: current.corpId,
+        openKfid: current.openKfid,
+        externalUserId: current.externalUserId,
+        wechatAccountId: current.wechatAccountId,
+        conversationId: current.conversationId,
+        customerId: current.customerId,
+        memberUserId: current.memberUserId,
+        state: current.state,
+        version: Math.max(0, Number(current.version || 0)) + 1,
+        createdAt: current.createdAt,
+        updatedAt: new Date().toISOString(),
+      };
+      data.wechatWorkCustomerUpgrades[index] = record;
+      this.write(data);
+      return record;
+    });
+  }
+
   upsertWechatWorkAudit(payload: Record<string, unknown>) {
     const recordId = String(payload.id || "").trim();
     if (!recordId) return this.recordWechatWorkAudit(payload);
@@ -4570,6 +5125,127 @@ export class LocalStoreService {
     }
     this.write(data);
     return record;
+  }
+
+  createWechatWorkEventSendTaskFromCredential(params: {
+    credentialId: string;
+    operationKey: string;
+    identity: { wechatAccountId: string; conversationId: string; customerId: string };
+    binding: { openKfid: string; externalUserId: string };
+    payload: Record<string, unknown>;
+    guardSnapshot: Record<string, unknown>;
+  }) {
+    const data = this.read();
+    const operationKey = normalizeOperationKey(params.operationKey, "operationKey");
+    const taskId = deterministicOperationId("send", operationKey);
+    const existingTask = data.sendTasks.find((item) => item.id === taskId) || null;
+    if (existingTask) {
+      throw new BadRequestException("企业微信事件响应发送任务已存在，不能重复创建");
+    }
+    const credentialIndex = data.wechatWorkAuditLogs.findIndex((item) => item.id === String(params.credentialId || "").trim());
+    if (credentialIndex < 0) return null;
+    const credential = data.wechatWorkAuditLogs[credentialIndex];
+    if (credential.action !== "event_reply_credential") {
+      throw new BadRequestException("企业微信事件响应凭证不存在或已不可用");
+    }
+    if (
+      credential.wechatAccountId !== params.identity.wechatAccountId ||
+      credential.conversationId !== params.identity.conversationId ||
+      credential.customerId !== params.identity.customerId ||
+      credential.openKfid !== params.binding.openKfid ||
+      credential.externalUserId !== params.binding.externalUserId
+    ) {
+      throw new BadRequestException("企业微信事件响应凭证与当前客户身份不一致");
+    }
+    if (credential.status !== "pending") return null;
+    const originalSecret = credential.eventCodeSecret;
+    if (!originalSecret || !credential.eventCodeHash) {
+      throw new BadRequestException("企业微信事件响应凭证缺少加密体");
+    }
+    const now = new Date().toISOString();
+    const expiresAt = Date.parse(String(credential.expiresAt || ""));
+    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+      const expired = {
+        ...credential,
+        status: "expired",
+        expiredAt: now,
+        eventCredentialSecretClearedAt: now,
+        eventCredentialSecretStored: false,
+        updatedAt: now,
+      };
+      delete expired.eventCodeSecret;
+      data.wechatWorkAuditLogs[credentialIndex] = expired;
+      this.write(data);
+      throw new BadRequestException("企业微信事件响应凭证已过期，请等待客户新事件后再发送");
+    }
+    const eventGuardSnapshot = {
+      ...params.guardSnapshot,
+      eventCredentialId: credential.id,
+      eventCodeHash: credential.eventCodeHash,
+      eventCredentialExpiresAt: credential.expiresAt,
+    };
+    const taskInput = {
+      operationKey,
+      wechatAccountId: params.identity.wechatAccountId,
+      conversationId: params.identity.conversationId,
+      customerId: params.identity.customerId,
+      payload: {
+        ...params.payload,
+        eventCredentialId: credential.id,
+        eventCodeHash: credential.eventCodeHash,
+        eventCodeSecret: originalSecret,
+        eventCredentialExpiresAt: credential.expiresAt,
+      },
+      guardSnapshot: eventGuardSnapshot,
+    };
+    const binding = this.validateSendTaskBinding(data, taskInput);
+    const conversation = data.conversations.find((item) => item.id === taskInput.conversationId) || null;
+    const normalizedPayload = {
+      ...taskInput,
+      customerId: taskInput.customerId || conversation?.customerId || null,
+      designJobId: binding.designJobId,
+    };
+    const requestOperation = requestOperationMetadata(
+      operationKey,
+      createSendTaskOperationFingerprint(taskInput || {}, {
+        conversationId: taskInput.conversationId,
+        customerId: normalizedPayload.customerId,
+        wechatAccountId: taskInput.wechatAccountId,
+      }),
+    );
+    const consumed = {
+      ...credential,
+      status: "consumed",
+      consumedAt: now,
+      sendTaskId: taskId,
+      consumedOperationKey: operationKey,
+      eventCredentialSecretClearedAt: now,
+      eventCredentialSecretStored: false,
+      updatedAt: now,
+    };
+    delete consumed.eventCodeSecret;
+    const taskRecord = {
+      id: taskId,
+      status: "queued",
+      queuedAt: now,
+      createdAt: now,
+      updatedAt: now,
+      ...normalizedPayload,
+      guardSnapshot: {
+        status: "pending",
+        checks: [],
+        binding,
+        ...(normalizedPayload.guardSnapshot || {}),
+        requestOperation,
+      },
+    };
+    data.wechatWorkAuditLogs[credentialIndex] = consumed;
+    data.sendTasks.push(taskRecord);
+    this.write(data);
+    return {
+      credential: { ...consumed, eventCodeSecret: originalSecret },
+      task: this.hydrateSendTask(data, taskRecord),
+    };
   }
 
   updateReviewLog(id: string, patch: any) {
@@ -5336,51 +6012,10 @@ function isTerminalWechatWorkAudit(record: any) {
   return (
     (action === "inbound_processed" && status === "processed") ||
     (action === "inbound_ignored" && status === "ignored") ||
-    (action === "inbound_duplicate" && status === "duplicate") ||
     (action === "event_processed" && status === "processed") ||
     (action === "send_async_failed" && status === "processed") ||
     (action === "inbound_failed" && status === "permanent_manual_review")
   );
-}
-
-function normalizeTimelineAttachments(value: unknown, fallbackStatus: string) {
-  if (!Array.isArray(value)) return [];
-  return value.filter((attachment) => {
-    if (typeof attachment === "string") return Boolean(attachment.trim());
-    if (!attachment || typeof attachment !== "object") return false;
-    const item = attachment as Record<string, unknown>;
-    return [
-      item.kind,
-      item.type,
-      item.msgtype,
-      item.mimeType,
-      item.contentType,
-      item.url,
-      item.localPath,
-      item.path,
-      item.filePath,
-      item.name,
-      item.fileName,
-    ].some((candidate) => Boolean(String(candidate || "").trim()));
-  }).map((attachment, index) => {
-    const item = attachment && typeof attachment === "object"
-      ? attachment as Record<string, unknown>
-      : { name: String(attachment || "") };
-    const mimeType = String(item.mimeType || item.contentType || "");
-    const source = String(item.url || item.localPath || item.path || item.filePath || item.name || "");
-    const explicitKind = String(item.kind || item.type || item.msgtype || "").toLowerCase();
-    const kind = explicitKind.includes("image") || mimeType.startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp)$/i.test(source)
-      ? "image"
-      : "file";
-    return {
-      ...item,
-      id: String(item.id || `attachment-${index + 1}`),
-      kind,
-      name: String(item.name || item.fileName || (source ? path.basename(source) : kind === "image" ? "图片" : "附件")),
-      mimeType,
-      status: String(item.status || fallbackStatus),
-    };
-  });
 }
 
 function timelineTaskAttachments(task: any, designAssets: any[] = []) {
@@ -5392,7 +6027,7 @@ function timelineTaskAttachments(task: any, designAssets: any[] = []) {
   const orderedAssets = assetIds.map((assetId: string) => assetsById.get(assetId)).filter(Boolean) as any[];
   const imageAssets = orderedAssets.filter((asset: any) => ["image/jpeg", "image/png"].includes(String(asset?.mimeType || "").toLowerCase()));
   const fileAssets = orderedAssets.filter((asset: any) => !imageAssets.includes(asset));
-  return normalizeTimelineAttachments(
+  return normalizeConversationTimelineAttachments(
     [
       ...imagePaths.map((filePath: unknown, index: number) => ({
         kind: "image",
@@ -5949,9 +6584,14 @@ function normalizeData(data: Partial<StoreData>): { data: StoreData; changed: bo
     "trainingSamples",
     "knowledgeEntries",
     "routeEvaluations",
+    "agentTasks",
+    "agentTaskSteps",
+    "agentTaskApprovals",
+    "agentTaskToolExecutions",
     "automationRuns",
     "wechatWorkBindings",
     "wechatWorkAuditLogs",
+    "wechatWorkCustomerUpgrades",
     "wechatWorkSyncCursors",
     "personalWechatRpaBindings",
     "personalWechatRpaAuditLogs",
@@ -6683,9 +7323,14 @@ function seedData(): StoreData {
     trainingSamples: [],
     knowledgeEntries,
     routeEvaluations: [],
+    agentTasks: [],
+    agentTaskSteps: [],
+    agentTaskApprovals: [],
+    agentTaskToolExecutions: [],
     automationRuns: [],
     wechatWorkBindings: [],
     wechatWorkAuditLogs: [],
+    wechatWorkCustomerUpgrades: [],
     wechatWorkSyncCursors: [],
     personalWechatRpaBindings: [],
     personalWechatRpaAuditLogs: [],
@@ -6868,18 +7513,6 @@ export function seedAgentConfig(now: string) {
       updatedAt: now,
     },
     {
-      id: "agent_size_recommendation",
-      key: "size_recommendation",
-      name: "尺码推荐 Agent",
-      scene: "尺码、身高体重、适配建议",
-      description: "根据客户身体信息和商品规则推荐尺码，不确定时追问关键参数。",
-      valueLevel: "low_auto",
-      enabled: true,
-      sortOrder: 50,
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
       id: "agent_general",
       key: "general",
       name: "未分类兜底 Agent",
@@ -6909,7 +7542,6 @@ export function seedAgentConfig(now: string) {
     ["agent_logistics_exception", "物流安抚", "先承接情绪，再说明核查和处理动作。"],
     ["agent_after_sales", "售后方案", "区分退款、退货、换货、补发，敏感争议不自动承诺赔付。"],
     ["agent_after_sales", "高情商话术", "避免机械模板，使用自然、负责、明确下一步的表达。"],
-    ["agent_size_recommendation", "参数追问", "缺少身高、体重、版型或穿着偏好时先追问。"],
     ["agent_general", "防乱回复", "客户、账号、会话不匹配时不回复，交给人工确认。"],
   ];
 
@@ -6925,4 +7557,23 @@ export function seedAgentConfig(now: string) {
   }));
 
   return { agents, agentSkills };
+}
+
+function assertAgentTaskReplay(existing: any, payload: any, operationKey: string) {
+  const expectedIdentity = payload.identity || payload;
+  const storedIdentity = {
+    wechatAccountId: String(existing.wechatAccountId || ""),
+    conversationId: String(existing.conversationId || ""),
+    customerId: String(existing.customerId || ""),
+  };
+  for (const key of ["wechatAccountId", "conversationId", "customerId"] as const) {
+    const expected = String(expectedIdentity?.[key] || "");
+    if (expected && storedIdentity[key] && expected !== storedIdentity[key]) {
+      throw new BadRequestException(`agent task replay changed ${key}: ${operationKey}`);
+    }
+  }
+  const expectedObjective = String(payload.objective || "");
+  if (expectedObjective && String(existing.objective || "") && expectedObjective !== String(existing.objective)) {
+    throw new BadRequestException(`agent task replay changed objective: ${operationKey}`);
+  }
 }

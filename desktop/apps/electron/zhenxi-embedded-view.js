@@ -3,11 +3,6 @@
 const crypto = require("node:crypto");
 const os = require("node:os");
 
-const ZHENXI_REMOTE_ORIGINS = new Set([
-  "https://app.zhenxiai.cloud",
-  "https://zhenxiai.cloud",
-  "https://www.zhenxiai.cloud",
-]);
 const ZHENXI_DESKTOP_VIEWPORT_WIDTH = 1440;
 const ZHENXI_MINIMUM_ZOOM_FACTOR = 0.5;
 
@@ -22,9 +17,6 @@ function normalizeZhenxiEmbeddedUrl(value) {
   }
   if (parsed.username || parsed.password) return "";
 
-  if (parsed.protocol === "https:" && ZHENXI_REMOTE_ORIGINS.has(parsed.origin)) {
-    return parsed.href;
-  }
   if (parsed.protocol !== "http:" || !isLoopbackHostname(parsed.hostname)) return "";
   const port = Number(parsed.port || 80);
   if (port !== 3000 && (port < 31870 || port > 31879)) return "";
@@ -52,6 +44,19 @@ function createZhenxiDesktopDeviceInfo(values = {}) {
   return {
     id: `desktop-${digest.slice(0, 32)}`,
     label: `${hostname} / ${platform}`,
+  };
+}
+
+function createZhenxiEmbeddedActivationStatus(deviceId) {
+  const normalized = String(deviceId || "").trim().toLowerCase();
+  return {
+    required: false,
+    active: true,
+    reason: "not_required",
+    deviceIdSuffix: normalized
+      ? crypto.createHash("sha256").update(normalized).digest("hex").slice(0, 10)
+      : "",
+    activation: null,
   };
 }
 
@@ -92,6 +97,7 @@ function safeValue(explicit, read, fallback) {
 }
 
 module.exports = {
+  createZhenxiEmbeddedActivationStatus,
   createZhenxiDesktopDeviceInfo,
   normalizeZhenxiEmbeddedBounds,
   normalizeZhenxiEmbeddedUrl,

@@ -255,6 +255,64 @@ test("does not reopen a creative plan that already has a durable design job", ()
   assert.equal(result, null);
 });
 
+test("treats a generation progress question as a status read instead of creative copy", () => {
+  const pending = {
+    kind: "clarify",
+    module: "customer_creative",
+    planId: "customer-creative:pending-card-status",
+    requestedDeliverables: ["greeting_card"],
+    missingFields: ["copy_text"],
+    logoMode: "provided",
+    assetIds: ["asset-logo-1"],
+  };
+
+  const status = planZhenxiCustomerRequest({
+    text: "生成好了吗",
+    previousPlan: pending,
+    requestContextId: "msg-card-status-1",
+  });
+
+  assert.equal(status.kind, "status");
+  assert.equal(status.reason, "zhenxi_status_not_started");
+  assert.equal(status.designJobStatus, "not_started");
+  assert.equal(status.designJobId, "");
+  assert.equal(status.needsHumanReview, false);
+  assert.match(status.replyText, /还没有开始生成/);
+  assert.doesNotMatch(status.replyText, /正在.*生成|生成 4 张/);
+  assert.equal(status.designRequests, undefined);
+});
+
+test("reports an unknown paid-generation outcome without submitting another job", () => {
+  const previousPlan = {
+    kind: "image",
+    module: "customer_creative",
+    planId: "customer-creative:unknown-card-status",
+    requestedDeliverables: ["greeting_card"],
+    missingFields: [],
+  };
+  const status = planZhenxiCustomerRequest({
+    text: "贺卡出图了吗？",
+    previousPlan,
+    existingJobs: [{
+      id: "design-job-unknown-1",
+      status: "manual_review",
+      submitDispatchStatus: "outcome_unknown",
+      errorMessage: "设计平台生成结果未知，禁止普通重试。",
+      createdAt: "2026-08-20T06:11:03.153Z",
+      requirements: { customerAgent: { planId: previousPlan.planId } },
+      images: [],
+    }],
+  });
+
+  assert.equal(status.kind, "status");
+  assert.equal(status.reason, "zhenxi_status_outcome_unknown");
+  assert.equal(status.designJobId, "design-job-unknown-1");
+  assert.equal(status.needsHumanReview, true);
+  assert.match(status.replyText, /不能确认生成成功/);
+  assert.match(status.replyText, /不重复生成|重复扣费/);
+  assert.equal(status.designRequests, undefined);
+});
+
 test("stops unquoted creative copy before following logo and size instructions", () => {
   const plan = planZhenxiCustomerRequest({
     text: "这是内部链路测试。只需要做贺卡，不要搭品图，不要吊牌，不要腰封。贺卡文案：感谢一路相伴。不要Logo，成品尺寸90×54mm。",

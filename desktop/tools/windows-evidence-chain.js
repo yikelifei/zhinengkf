@@ -357,6 +357,28 @@ function sameIdentity(left, right) {
   return Boolean(left && right && left.dev === right.dev && left.ino === right.ino);
 }
 
+function renamePrivateTempWithRetry(requested, quarantine, expectedIdentity) {
+  const retryableCodes = new Set(["EACCES", "EBUSY", "EPERM"]);
+  const retryCount = 20;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      fs.renameSync(requested, quarantine);
+      return;
+    } catch (error) {
+      if (!retryableCodes.has(error?.code) || attempt >= retryCount) throw error;
+      const stat = fs.lstatSync(requested);
+      if (stat.isSymbolicLink() || !stat.isDirectory() || !sameIdentity(privateTempIdentity(requested), expectedIdentity)) {
+        throw new Error("private temp identity changed while cleanup was waiting for a file lock");
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150);
+    }
+  }
+}
+
+function removePrivateTempQuarantine(quarantine) {
+  fs.rmSync(quarantine, { recursive: true, force: true, maxRetries: 20, retryDelay: 150 });
+}
+
 function createPrivateTemp(prefix = TEMP_PREFIX) {
   if (![TEMP_PREFIX, SMOKE_TEMP_PREFIX].includes(prefix)) throw new Error("unsupported private temp prefix");
   const nonce = crypto.randomBytes(32).toString("hex");
@@ -371,9 +393,9 @@ function createPrivateTemp(prefix = TEMP_PREFIX) {
     const quarantine = path.join(os.tmpdir(), `${prefix}failed-create-${crypto.randomBytes(16).toString("hex")}`);
     try {
       if (!sameIdentity(privateTempIdentity(tempRoot), identity)) throw new Error("private temp identity changed during failed creation cleanup");
-      fs.renameSync(tempRoot, quarantine);
+      renamePrivateTempWithRetry(tempRoot, quarantine, identity);
       if (!sameIdentity(privateTempIdentity(quarantine), identity)) throw new Error("private temp identity changed after failed creation quarantine");
-      fs.rmSync(quarantine, { recursive: true, force: true });
+      removePrivateTempQuarantine(quarantine);
     } catch (cleanupError) {
       failure = cleanupError;
     }
@@ -431,9 +453,9 @@ function cleanupPrivateTemp(handle) {
   }
   if (marker?.nonce !== handle.nonce || marker?.prefix !== handle.prefix) throw new Error("private temp ownership marker is invalid");
   const quarantine = path.join(tempParent, `${handle.prefix}cleanup-${crypto.randomBytes(16).toString("hex")}`);
-  fs.renameSync(requested, quarantine);
+  renamePrivateTempWithRetry(requested, quarantine, handle.identity);
   if (!sameIdentity(privateTempIdentity(quarantine), handle.identity)) throw new Error("private temp identity changed during cleanup");
-  fs.rmSync(quarantine, { recursive: true, force: true });
+  removePrivateTempQuarantine(quarantine);
 }
 
 function loadReleasePolicy(policyFile = DEFAULT_POLICY_FILE) {

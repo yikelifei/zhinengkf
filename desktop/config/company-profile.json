@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "smart_kefu_company_profile_v1",
+  "profileId": "zhenxi-liye-internal",
+  "organization": {
+    "displayName": "臻希礼业"
+  },
+  "workspace": {
+    "displayName": "臻希礼业企业工作台",
+    "productName": "臻希智能客服",
+    "ownership": "company",
+    "edition": "single_company_internal"
+  },
+  "wechatWork": {
+    "accountDisplayName": "禮想礼品"
+  },
+  "employeeAccess": {
+    "directorySource": "wechat_work",
+    "servicerProvisioning": "company_admin_managed",
+    "desktopOperatorAccounts": "not_enabled"
+  },
+  "deployment": {
+    "mode": "managed_host",
+    "runtimeCredentialPolicy": "external_private_runtime",
+    "employeeSetup": "zero_secret"
+  },
+  "publicEndpoints": {
+    "customerServiceBaseUrl": "https://kefu.zhenxiliye.cn"
+  }
+}

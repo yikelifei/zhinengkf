@@ -37,6 +37,7 @@ const featureByRouteId = {
   sendDiagnosticOperations: "SendDiagnosticsOperationsPage",
   integrationChannels: "ChannelsStatusPage",
   wechatWorkChannels: "WechatWorkPreflightPage",
+  wechatWorkOperations: "WechatWorkOperationsPage",
   wechatWorkCustomers: "WechatWorkCustomerEntryPage",
   wechatWorkFlow: "WechatWorkFlowPage",
   wechatWorkSettings: "WechatWorkConfigurationPage",
@@ -195,11 +196,15 @@ test("new routes use bounded base styles, honest inline confirmations, and mobil
   assert.match(layout, /styles\/base\.css/);
   assert.doesNotMatch(layout, /globals\.css|maximumScale/);
   assert.equal((baseCss.match(/!important/g) || []).length, 6);
+  assert.match(baseCss, /html\s*\{[\s\S]*?height:\s*100%;[\s\S]*?overflow:\s*hidden;/);
+  assert.match(baseCss, /body\s*\{[\s\S]*?height:\s*100%;[\s\S]*?overflow:\s*hidden;/);
   assert.match(baseCss, /@media \(prefers-reduced-motion: reduce\)[\s\S]*scroll-behavior: auto !important/);
   assert.match(baseCss, /@media \(max-width: 760px\)[\s\S]*min-height: 44px !important;[\s\S]*min-width: 44px !important;/);
   assert.ok(baseCss.length < 12000, "base styles must stay a small reset and token layer");
   assert.doesNotMatch(topbar, /<h1/);
   assert.match(topbar, /className=\{styles\.topbarTitle\}/);
+  assert.match(shellCss, /\.featureContent\s*\{[\s\S]*?min-height:\s*0;/);
+  assert.doesNotMatch(shellCss, /\.featureContent\s*\{[\s\S]*?min-height:\s*100%;/);
   assert.match(shellCss, /@media \(max-width: 760px\)[\s\S]*min-height: 44px/);
   assert.match(workbenchCss, /\.mobileDrawer > header button \{[\s\S]*width: 44px;[\s\S]*height: 44px;/);
 

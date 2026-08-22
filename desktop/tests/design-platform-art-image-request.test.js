@@ -121,9 +121,20 @@ test("design platform activation redeem is wired before account login", () => {
   assert.match(webAccountSource, /readRememberedDesignPlatformDeviceId/);
 });
 
-test("customer poster prompt forbids invented products and enforces production typography", () => {
+test("customer material generation uses the selected custom template and a copy-first pipeline", () => {
   const source = fs.readFileSync(clientSourcePath, "utf8");
 
+  assert.match(source, /const customerCreative = payload\.designType === "zhenxi_image"/);
+  assert.match(source, /const prompt = customerCreative \? buildDesignPrompt\(payload\) : buildGiftBoxPrompt\(payload\)/);
+  assert.match(source, /category: customerCreative \? material\.category : "gift_box"/);
+  assert.match(source, /templateGroupKey: customerCreative \? material\.templateGroupKey : "gift_box_render"/);
+  assert.match(source, /cardType: customerCreative \? material\.cardType : appConfig\.designPlatformCardType/);
+  assert.match(source, /type: "prompt"/);
+  assert.match(source, /prompts\.length !== CUSTOMER_DESIGN_CANDIDATE_COUNT/);
+  assert.match(source, /executeArtImageLocalCopyStage\(requestBody, externalJobId\)/);
+  assert.match(source, /image dispatch was blocked/);
+  assert.match(source, /必须使用“\$\{material\.cardType\}”/);
+  assert.doesNotMatch(source, /private async buildArtImageLocalRequest[\s\S]*?const prompt = buildGiftBoxPrompt\(payload\);/);
   assert.match(source, /visualContentMode === "graphic_only"/);
   assert.match(source, /不得出现或虚构商品、礼盒、包装/);
   assert.match(source, /只能使用参考素材和已选商品库中的商品/);

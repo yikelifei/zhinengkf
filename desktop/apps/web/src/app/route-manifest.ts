@@ -1,7 +1,7 @@
 import type { WorkspaceSectionId } from "../components/workbench-shell/types";
 
 export type TrainingWorkbenchView = "overview" | "knowledge" | "import" | "history" | "review" | "batch" | "skills";
-export type WechatWorkbenchView = "channels" | "customers" | "flow" | "config";
+export type WechatWorkbenchView = "channels" | "operations" | "customers" | "flow" | "config";
 export type AccountWorkbenchView = "wechat" | "access" | "models" | "delivery";
 export type SendWorkbenchView = "queue" | "blocked" | "diagnostics";
 export type ReviewWorkbenchView = "handoff" | "design" | "quote" | "order" | "logs";
@@ -48,16 +48,17 @@ export const WORKBENCH_ROUTES = {
     id: "conversations",
     href: "/conversations",
     sectionId: "conversation-center",
-    title: "会话管理",
-    responsibility: "筛选并选择需要处理的客户会话。",
+    title: "会话筛选",
+    responsibility: "筛选并选择需要完整处理的企业微信客户会话。",
     primaryAction: "打开一条会话",
     legacyHash: "conversation-center",
+    showInModuleNav: false,
   },
   wechatWorkWorkspace: {
     id: "wechatWorkWorkspace",
     href: "/integrations/wechat-work/workspace",
-    sectionId: "wecom-workspace",
-    title: "企业微信工作台",
+    sectionId: "conversation-center",
+    title: "企业微信会话",
     responsibility: "在智能客服内读取企业微信官方客服消息、展示真实客户会话并通过官方通道回复。",
     primaryAction: "处理企业微信会话",
     legacyHash: "wecom-workspace",
@@ -203,6 +204,16 @@ export const WORKBENCH_ROUTES = {
     legacyHash: "wechat-channel-center:customers",
     initialView: { wechat: "customers" },
   },
+  wechatWorkOperations: {
+    id: "wechatWorkOperations",
+    href: "/integrations/wechat-work/operations",
+    sectionId: "wechat-channel-center",
+    title: "企业微信客服运营",
+    responsibility: "管理微信客服账号、接待人员和可见企业成员，并对线上配置变更保留审计记录。",
+    primaryAction: "刷新企业微信运营数据",
+    legacyHash: "wechat-channel-center:operations",
+    initialView: { wechat: "operations" },
+  },
   wechatWorkFlow: {
     id: "wechatWorkFlow",
     href: "/integrations/wechat-work/flow",
@@ -330,8 +341,8 @@ export const WORKBENCH_ROUTES = {
     id: "reviewInbox",
     href: "/reviews/inbox",
     sectionId: "review-center",
-    title: "人工接管队列",
-    responsibility: "处理需要人工接管的会话、阻塞发送和超时任务。",
+    title: "人工关注队列",
+    responsibility: "处理需要人工补充的会话、阻塞发送和超时任务。",
     primaryAction: "处理第一项",
     legacyHash: "review-center:handoff",
     initialView: { review: "handoff" },
@@ -850,7 +861,7 @@ export const WORKBENCH_ROUTE_LIST = Object.values(WORKBENCH_ROUTES) as Workbench
 
 const DEFAULT_ROUTE_BY_SECTION: Record<WorkspaceSectionId, WorkbenchRouteId> = {
   "overview-center": "overview",
-  "conversation-center": "conversations",
+  "conversation-center": "wechatWorkWorkspace",
   "wecom-workspace": "wechatWorkWorkspace",
   "routing-center": "routing",
   "send-center": "sendQueue",
@@ -877,6 +888,7 @@ const SEND_ROUTE_BY_VIEW: Record<SendWorkbenchView, WorkbenchRouteId> = {
 };
 const WECHAT_ROUTE_BY_VIEW: Record<WechatWorkbenchView, WorkbenchRouteId> = {
   channels: "wechatWorkChannels",
+  operations: "wechatWorkOperations",
   customers: "wechatWorkCustomers",
   flow: "wechatWorkFlow",
   config: "wechatWorkSettings",

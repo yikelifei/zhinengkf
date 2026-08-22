@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const asar = require("@electron/asar");
+const { loadCompanyProfile } = require("../packages/runtime/company-profile");
 const {
   PACKAGE_PROVENANCE_SCHEMA_VERSION,
   resolveRepositoryState,
@@ -81,8 +82,27 @@ async function verifyWindowsPackage(options) {
   checkExists(checks, "packaged rules entry", path.join(resourcesDir, "services", "runtime-root", "packages", "rules", "index.js"), safeOutputRoot);
   checkExists(checks, "packaged window observer", path.join(resourcesDir, "services", "runtime-root", "tools", "wechat-window-observer.js"), safeOutputRoot);
   checkExists(checks, "packaged placeholder-only AI settings", path.join(resourcesDir, "services", "runtime-root", "config", "settings.yaml"), safeOutputRoot);
+  const companyProfilePath = path.join(resourcesDir, "company", "company-profile.json");
+  checkExists(checks, "embedded company profile", companyProfilePath, safeOutputRoot);
+  try {
+    const companyProfile = loadCompanyProfile({ filePath: companyProfilePath });
+    const validCompanyBinding = companyProfile.organization.displayName === "臻希礼业"
+      && companyProfile.workspace.ownership === "company"
+      && companyProfile.workspace.edition === "single_company_internal"
+      && companyProfile.wechatWork.accountDisplayName === "禮想礼品";
+    checks.push({
+      name: "single-company package binding",
+      status: validCompanyBinding ? "PASS" : "FAIL",
+      detail: validCompanyBinding
+        ? "Installer is bound to the 臻希礼业 company workspace and the 禮想礼品 customer-service account."
+        : "Embedded company profile does not match the approved single-company workspace.",
+    });
+  } catch (error) {
+    checks.push({ name: "single-company package binding", status: "FAIL", detail: error.message });
+  }
   checkExists(checks, "packaged Prisma client", path.join(resourcesDir, "services", "runtime-root", "node_modules", "@prisma", "client", "default.js"), safeOutputRoot);
   checkExists(checks, "packaged generated Prisma client", path.join(resourcesDir, "services", "runtime-root", "node_modules", ".prisma", "client", "default.js"), safeOutputRoot);
+  verifyPackagedPrismaTempEngines(checks, resourcesDir);
   checkExists(checks, "packaged Sharp runtime", path.join(resourcesDir, "services", "runtime-root", "node_modules", "sharp", "dist", "index.cjs"), safeOutputRoot);
   checkExists(checks, "packaged Sharp Windows native addon", path.join(resourcesDir, "services", "runtime-root", "node_modules", "@img", "sharp-win32-x64", "lib", "sharp-win32-x64-0.35.3.node"), safeOutputRoot);
   if (!options.directoryOnly) {
@@ -97,6 +117,17 @@ async function verifyWindowsPackage(options) {
     name: "packaged API smoke",
     status: smokeReport?.status === "PASS" ? "PASS" : smokeReport?.status === "BLOCKED" ? "BLOCKED" : "FAIL",
       detail: smokeReport?.status === "PASS" ? `API, overview, static asset, and Web-to-API proxy passed on isolated ports; rules and Prisma loaded from read-only runtime root` : smokeReport?.summary || smokeReport?.error || "missing smoke report",
+  });
+
+  const desktopLaunchSmoke = options.desktopLaunchSmokeResult || (options.trustStoredSmokeReport === false
+    ? { status: "BLOCKED", summary: "stored desktop launch smoke JSON is not trusted by external evidence validation" }
+    : readJson(path.join(options.outputDir, "verification", "packaged-desktop-launch-smoke.json")));
+  checks.push({
+    name: "packaged desktop launch with default ports unavailable",
+    status: desktopLaunchSmoke?.status === "PASS" ? "PASS" : desktopLaunchSmoke?.status === "BLOCKED" ? "BLOCKED" : "FAIL",
+    detail: desktopLaunchSmoke?.status === "PASS"
+      ? `Smart Kefu.exe stayed alive and selected API=${desktopLaunchSmoke.ports?.api}, Web=${desktopLaunchSmoke.ports?.web} while 3100/3200 were unavailable.`
+      : desktopLaunchSmoke?.summary || desktopLaunchSmoke?.error || "missing desktop launch smoke report",
   });
 
   if (fs.existsSync(asarPath)) {
@@ -235,6 +266,34 @@ function verifySensitiveFiles(checks, resourcesDir) {
   });
 }
 
+function verifyPackagedPrismaTempEngines(checks, resourcesDir) {
+  const prismaClientDir = path.join(resourcesDir, "services", "runtime-root", "node_modules", ".prisma", "client");
+  if (!fs.existsSync(prismaClientDir)) {
+    checks.push({
+      name: "packaged Prisma temp engines",
+      status: "FAIL",
+      detail: "Packaged generated Prisma client directory is missing.",
+    });
+    return;
+  }
+
+  const stale = [];
+  walk(prismaClientDir, (file) => {
+    if (isPrismaTempEngineFile(file)) stale.push(normalizeArchivePath(path.relative(resourcesDir, file)));
+  });
+  checks.push({
+    name: "packaged Prisma temp engines",
+    status: stale.length ? "FAIL" : "PASS",
+    detail: stale.length
+      ? `Stale Prisma temporary engine file(s) were packaged: ${stale.slice(0, 20).join(", ")}`
+      : "No stale Prisma temporary engine files found.",
+  });
+}
+
+function isPrismaTempEngineFile(value) {
+  return /^(?:query_engine|libquery_engine).*\.tmp\d+$/i.test(path.basename(String(value || "")));
+}
+
 function isForbiddenArchivePath(value) {
   const normalized = normalizeArchivePath(value).toLowerCase();
   return (
@@ -368,6 +427,7 @@ module.exports = {
   checkPortableExecutable,
   isForbiddenArchivePath,
   isForbiddenResourcePath,
+  isPrismaTempEngineFile,
   normalizeArchivePath,
   sha256FileStream,
   validatePackageProvenance,

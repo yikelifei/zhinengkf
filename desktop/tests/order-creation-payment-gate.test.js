@@ -10,7 +10,8 @@ require("ts-node").register({
 });
 
 const { appConfig } = require("../apps/api/src/shared/app-config");
-const { OrdersService } = require("../apps/api/src/orders/orders.service");
+const { createOrderDraftBusinessFingerprint, OrdersService } = require("../apps/api/src/orders/orders.service");
+const { buildOrderDraftFromQuote } = require("../packages/rules");
 
 function createQuote(paymentStatus, paymentEvents = [], overrides = {}) {
   const selectedImage = { id: "image_1", imageId: "candidate_1", designJobId: "design_1", position: 1, selected: true };
@@ -272,6 +273,161 @@ test("order completion rejects fulfilled status when the delivery package snapsh
       /交付资料包|客户选图|商品组合快照/,
     );
     assert.equal(fixture.orderRecord.status, "processing");
+  } finally {
+    appConfig.useLocalStore = previousUseLocalStore;
+  }
+});
+
+test("Prisma inbound order creation fences, upserts and commits its recovery marker in one transaction", async () => {
+  const previousUseLocalStore = appConfig.useLocalStore;
+  const quote = createQuote("unpaid");
+  const transactionEvents = [];
+  const notificationTargets = [];
+  const transactionClient = {
+    inboundMessageOperation: {
+      async updateMany(query) {
+        transactionEvents.push({ type: "operation", query });
+        return { count: 1 };
+      },
+    },
+    quoteDraft: {
+      async updateMany(query) {
+        transactionEvents.push({ type: "quote-lock", query });
+        return { count: 1 };
+      },
+      async findUnique() {
+        transactionEvents.push({ type: "quote" });
+        return quote;
+      },
+    },
+    orderDraft: {
+      async upsert(query) {
+        transactionEvents.push({ type: "order", query });
+        return {
+          id: "order_prisma_1",
+          quoteDraftId: quote.id,
+          ...query.create,
+          customer: quote.customer,
+          conversation: quote.designJob.conversation,
+          wechatAccount: { id: quote.designJob.wechatAccountId },
+          designJob: quote.designJob,
+          selectedImage: quote.selectedImage,
+          quoteDraft: quote,
+          paymentEvents: [],
+        };
+      },
+    },
+  };
+  const prisma = {
+    quoteDraft: { async findUnique() { return quote; } },
+    async $transaction(callback) { return callback(transactionClient); },
+  };
+  const notifications = {
+    async create(_level, _title, _body, target) {
+      notificationTargets.push(target);
+      return { id: "notice_prisma_1", target };
+    },
+  };
+  const service = new OrdersService(prisma, {}, notifications);
+  const initialDecision = buildOrderDraftFromQuote(quote);
+  assert.equal(initialDecision.ok, true);
+  const orderBusinessFingerprint = createOrderDraftBusinessFingerprint(initialDecision.orderDraft);
+  const createOptions = {
+    inboundFence: {
+      operationId: "inbound_order_1",
+      claimToken: "claim_order_1",
+      leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+      operationResult: { stage: "routed" },
+      recoveryEffect: {
+        kind: "low_value_quote_acceptance",
+        phase: "quote_committed_pending_order",
+        quoteDraftId: quote.id,
+        orderBusinessFingerprint,
+      },
+      orderBusinessFingerprint,
+    },
+    notificationEffectKey: "inbound_order_1:order-draft-created-notification",
+  };
+
+  try {
+    appConfig.useLocalStore = false;
+    const order = await service.createFromQuote(quote.id, {
+      expectedWechatAccountId: "wechat_1",
+      expectedConversationId: "conversation_1",
+      expectedCustomerId: "customer_1",
+    }, createOptions);
+
+    assert.equal(order.id, "order_prisma_1");
+    assert.deepEqual(transactionEvents.map((event) => event.type), ["operation", "quote-lock", "quote", "order", "operation"]);
+    assert.equal(transactionEvents[0].query.where.claimToken, "claim_order_1");
+    assert.equal(transactionEvents[4].query.data.result.recoveryEffect.phase, "quote_and_order_committed");
+    assert.equal(transactionEvents[4].query.data.result.recoveryEffect.orderDraftId, order.id);
+    assert.equal(notificationTargets[0].effectKey, "inbound_order_1:order-draft-created-notification");
+
+    const orderWritesBeforeRecovery = transactionEvents.filter((event) => event.type === "order").length;
+    quote.unitPrice = 190;
+    quote.totalPrice = 9500;
+    quote.profit = 4500;
+    await assert.rejects(
+      () => service.createFromQuote(quote.id, {
+        expectedWechatAccountId: "wechat_1",
+        expectedConversationId: "conversation_1",
+        expectedCustomerId: "customer_1",
+      }, createOptions),
+      /business fields changed|refusing to overwrite/,
+    );
+    assert.equal(transactionEvents.filter((event) => event.type === "order").length, orderWritesBeforeRecovery);
+  } finally {
+    appConfig.useLocalStore = previousUseLocalStore;
+  }
+});
+
+test("Prisma order replay never overwrites an existing order with revised quote money", async () => {
+  const previousUseLocalStore = appConfig.useLocalStore;
+  const originalQuote = createQuote("unpaid");
+  const originalDecision = buildOrderDraftFromQuote(originalQuote);
+  assert.equal(originalDecision.ok, true);
+  const existingOrder = {
+    id: "order_existing_prisma",
+    quoteDraftId: originalQuote.id,
+    ...originalDecision.orderDraft,
+    customer: originalQuote.customer,
+    conversation: originalQuote.designJob.conversation,
+    wechatAccount: { id: originalQuote.designJob.wechatAccountId },
+    designJob: originalQuote.designJob,
+    selectedImage: originalQuote.selectedImage,
+    quoteDraft: originalQuote,
+    paymentEvents: [],
+  };
+  const revisedQuote = createQuote("unpaid", [], {
+    unitPrice: 190,
+    totalPrice: 9500,
+    profit: 4500,
+  });
+  let attemptedUpdate = null;
+  const prisma = {
+    quoteDraft: { async findUnique() { return revisedQuote; } },
+    orderDraft: {
+      async upsert(query) {
+        attemptedUpdate = query.update;
+        return existingOrder;
+      },
+    },
+  };
+  const service = new OrdersService(prisma, {}, { create: async () => ({}) });
+
+  try {
+    appConfig.useLocalStore = false;
+    await assert.rejects(
+      () => service.createFromQuote(revisedQuote.id, {
+        expectedWechatAccountId: "wechat_1",
+        expectedConversationId: "conversation_1",
+        expectedCustomerId: "customer_1",
+      }),
+      /refusing to overwrite/,
+    );
+    assert.deepEqual(attemptedUpdate, {});
+    assert.equal(existingOrder.totalPrice, 9000);
   } finally {
     appConfig.useLocalStore = previousUseLocalStore;
   }

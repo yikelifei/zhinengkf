@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { AlertTriangle, UserRoundCheck, X } from "lucide-react";
 import { ConversationThreadPane } from "../../components/conversation-workbench/conversation-thread-pane";
 import { conversationsFeatureApi, type ConversationsFeatureApi } from "./api";
 import { ConversationPageState } from "./conversation-page-state";
@@ -32,27 +31,16 @@ export function ConversationDetailPage({ api, conversationId, identityFilters, n
 
   const conversation = controller.selectedConversation;
   return (
-    <section className={`${styles.page} ${styles.detailPage}`} aria-labelledby="conversation-detail-title" aria-busy={controller.listLoading || controller.manualLockBusy || undefined}>
+    <section className={`${styles.page} ${styles.detailPage}`} aria-labelledby="conversation-detail-title" aria-busy={controller.listLoading || undefined}>
       <header className={styles.header}>
         <div>
           <h1 id="conversation-detail-title">{conversation.title}</h1>
-          <p>本页只负责阅读消息、生成辅助建议并提交人工回复。</p>
+          <p>智能客服默认自动回复；人工需要补充时直接输入并发送。</p>
         </div>
         <div className={styles.headerActions}>
           <Link className={styles.linkButton} data-action-id="conversations.detail.back-filtered-list" href={conversationListHref(navigation)}>返回筛选结果</Link>
           <Link className={styles.linkButton} data-action-id="conversations.detail.open-context" href={conversationRouteHref("/conversations/" + encodeURIComponent(conversation.id) + "/context", conversation, navigation)}>客户资料</Link>
           <Link className={styles.linkButton} data-action-id="conversations.detail.open-assignment" href={conversationRouteHref("/conversations/" + encodeURIComponent(conversation.id) + "/assignment", conversation, navigation)}>分配与 SLA</Link>
-          <button
-            className={conversation.manualLocked ? styles.warningButton + " " + styles.button : styles.primaryButton}
-            type="button"
-            data-action-id="conversations-manual-takeover"
-            aria-label={conversation.manualLocked ? "解除当前会话人工接管" : "人工接管当前会话"}
-            onClick={controller.requestManualLockChange}
-            disabled={!controller.canReply || controller.manualLockBusy}
-          >
-            <UserRoundCheck size={16} aria-hidden="true" />
-            {conversation.manualLocked ? "解除人工接管" : "人工接管"}
-          </button>
         </div>
       </header>
 
@@ -69,22 +57,11 @@ export function ConversationDetailPage({ api, conversationId, identityFilters, n
           controller.accessStatus?.enforcementReady
           && controller.accessStatus.capabilities.includes("approve_send"),
         )}
+        canManageChannels={Boolean(
+          controller.accessStatus?.enforcementReady
+          && controller.accessStatus.capabilities.includes("manage_channels"),
+        )}
       />
-
-      {controller.manualLockTarget !== null ? (
-        <section className={styles.confirmation} role="region" aria-live="polite" aria-labelledby="manual-lock-title">
-          <strong id="manual-lock-title"><AlertTriangle size={17} aria-hidden="true" /> 确认变更人工接管状态</strong>
-          <p>{controller.manualLockTarget
-            ? "接管后自动处理保持暂停；人工回复会在核对账号、会话和客户身份后进入企业微信安全发送队列。"
-            : "解除后服务端可能恢复自动处理；本操作不会重发历史消息。"}</p>
-          <div className={styles.confirmationActions}>
-            <button className={styles.button} type="button" data-action-id="conversations-manual-lock-cancel" aria-label="取消变更人工接管" onClick={controller.cancelManualLockChange}><X size={15} aria-hidden="true" />取消</button>
-            <button className={styles.primaryButton} type="button" data-action-id="conversations-manual-lock-confirm" aria-label="确认变更人工接管" onClick={() => void controller.confirmManualLockChange()}>
-              <UserRoundCheck size={15} aria-hidden="true" />确认变更
-            </button>
-          </div>
-        </section>
-      ) : null}
 
       <div className={styles.threadHost}>
         <ConversationThreadPane
@@ -93,6 +70,7 @@ export function ConversationDetailPage({ api, conversationId, identityFilters, n
           showBackButton={false}
           showContextButton={false}
           showTransferButton={false}
+          variant="wecom"
         />
       </div>
     </section>

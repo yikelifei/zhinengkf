@@ -94,7 +94,6 @@ const redirectedManifestRoutes = new Map([
 const sectionIds = [
   "overview-center",
   "conversation-center",
-  "wecom-workspace",
   "routing-center",
   "send-center",
   "wechat-channel-center",
@@ -121,6 +120,9 @@ test("typed route manifest covers every production URL and active workbench sect
   assert.equal(new Set(hrefs).size, hrefs.length, "route hrefs must be unique");
   for (const href of productionRoutes) assert.ok(hrefs.includes(href), `missing production route: ${href}`);
   for (const sectionId of sectionIds) assert.ok(sections.has(sectionId), `missing section: ${sectionId}`);
+  assert.equal(routes.WORKBENCH_ROUTES.wechatWorkWorkspace.sectionId, "conversation-center");
+  assert.equal(routes.WORKBENCH_ROUTES.conversations.showInModuleNav, false);
+  assert.equal(sections.has("wecom-workspace"), false);
   for (const route of routeList) {
     assert.ok(route.title.trim(), `${route.id} must have a title`);
     assert.ok(route.responsibility.trim(), `${route.id} must define one responsibility`);

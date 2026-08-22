@@ -12,8 +12,12 @@ const root = path.resolve(__dirname, "..");
 const {
   buildApiServiceEnvironment,
   buildWebServiceEnvironment,
+  createPackagedServiceEndpoints,
   desktopReadinessChallengeHeaders,
+  desktopEnvRequiresEnterpriseSetup,
   desktopSessionCookieHeader,
+  readPackagedCloudClientEnv,
+  reservePackagedServicePorts,
   resolvePackagedPaths,
   validateApiHealthResponse,
   validateApiReadinessResponse,
@@ -27,6 +31,7 @@ const {
   checkPortableExecutable,
   isForbiddenArchivePath,
   isForbiddenResourcePath,
+  isPrismaTempEngineFile,
   sha256FileStream,
   validatePackageProvenance,
   verifyWindowsPackage,
@@ -114,6 +119,8 @@ test("packaged services resolve from resources while mutable data resolves under
 
   assert.match(paths.apiEntry, /resources[\\/]services[\\/]api[\\/]main\.js$/);
   assert.match(paths.webEntry, /resources[\\/]services[\\/]web[\\/]apps[\\/]web[\\/]server\.js$/);
+  assert.match(paths.cloudClientEnvPath, /resources[\\/]cloud[\\/]cloud-client\.env$/);
+  assert.match(paths.userCloudClientEnvPath, /AppData[\\/]Roaming[\\/]Smart Kefu[\\/]config[\\/]cloud-client\.env$/);
   assert.match(
     paths.zhenxiMcpServerPath,
     /resources[\\/]services[\\/]runtime-root[\\/]packages[\\/]mcp[\\/]zhenxi-ai-server\.mjs$/,
@@ -131,12 +138,16 @@ test("packaged API and Web receive isolated environments and one trusted token",
     userDataPath: "C:\\Users\\operator\\AppData\\Roaming\\Smart Kefu",
     baseEnv: { PATH: "C:\\Windows\\System32" },
     token,
+    apiPort: 43201,
+    webPort: 43101,
   });
 
   assert.equal(env.INTERNAL_API_TOKEN, token);
   assert.equal(env.ELECTRON_RUN_AS_NODE, "1");
   assert.equal(env.NODE_ENV, "production");
   assert.equal(env.SMART_KEFU_RUNTIME_TARGET, "desktop");
+  assert.equal(env.API_PORT, "43201");
+  assert.equal(env.WEB_PORT, "43101");
   assert.match(
     env.ZHENXI_MCP_SERVER_PATH,
     /resources[\\/]services[\\/]runtime-root[\\/]packages[\\/]mcp[\\/]zhenxi-ai-server\.mjs$/,
@@ -149,14 +160,68 @@ test("packaged API and Web receive isolated environments and one trusted token",
     resourcesPath: "C:\\Program Files\\Smart Kefu\\resources",
     appPath: "C:\\Program Files\\Smart Kefu\\resources\\app.asar",
     userDataPath: "C:\\Users\\operator\\AppData\\Roaming\\Smart Kefu",
-    baseEnv: { PATH: "safe", DATABASE_URL: "database-secret", WECHAT_WORK_SECRET: "wecom-secret" },
+    baseEnv: {
+      PATH: "safe",
+      DATABASE_URL: "database-secret",
+      WECHAT_WORK_SECRET: "wecom-secret",
+      SMART_KEFU_CLOUD_API_BASE_URL: "https://kefu.zhenxiliye.cn",
+      SMART_KEFU_CLOUD_API_TOKEN: "b".repeat(64),
+    },
     token,
     webSessionProof: "proof",
+    apiPort: 43201,
+    webPort: 43101,
   });
   assert.equal(web.INTERNAL_API_TOKEN, token);
   assert.equal(web.DESKTOP_WEB_SESSION_PROOF, "proof");
+  assert.equal(web.PORT, "43101");
+  assert.equal(web.API_PORT, "43201");
+  assert.equal(web.WEB_PORT, "43101");
+  assert.equal(web.SMART_KEFU_CLOUD_API_BASE_URL, "https://kefu.zhenxiliye.cn");
+  assert.equal(web.SMART_KEFU_CLOUD_API_TOKEN, "b".repeat(64));
   assert.equal(web.DATABASE_URL, undefined);
   assert.equal(web.WECHAT_WORK_SECRET, undefined);
+});
+
+test("packaged Web reads only the cloud client API relay from resources and userData", (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "smart-kefu-cloud-client-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const resourcesPath = path.join(directory, "resources");
+  const userDataPath = path.join(directory, "user-data");
+  fs.mkdirSync(path.join(resourcesPath, "cloud"), { recursive: true });
+  fs.mkdirSync(path.join(userDataPath, "config"), { recursive: true });
+  fs.writeFileSync(path.join(resourcesPath, "cloud", "cloud-client.env"), [
+    "SMART_KEFU_CLOUD_API_BASE_URL=https://kefu.zhenxiliye.cn",
+    `SMART_KEFU_CLOUD_API_TOKEN=${"b".repeat(64)}`,
+    "WECHAT_WORK_SECRET=must-not-pass",
+  ].join("\n"), "utf8");
+  fs.writeFileSync(path.join(userDataPath, "config", "cloud-client.env"), [
+    `SMART_KEFU_CLOUD_API_TOKEN=${"c".repeat(64)}`,
+    "DATABASE_URL=must-not-pass",
+  ].join("\n"), "utf8");
+
+  const paths = resolvePackagedPaths({
+    resourcesPath,
+    appPath: path.join(resourcesPath, "app.asar"),
+    userDataPath,
+  });
+  assert.deepEqual(readPackagedCloudClientEnv(paths), {
+    SMART_KEFU_CLOUD_API_BASE_URL: "https://kefu.zhenxiliye.cn",
+    SMART_KEFU_CLOUD_API_TOKEN: "c".repeat(64),
+  });
+
+  const web = buildWebServiceEnvironment({
+    resourcesPath,
+    appPath: path.join(resourcesPath, "app.asar"),
+    userDataPath,
+    baseEnv: { PATH: "safe" },
+    token: "a".repeat(64),
+    webSessionProof: "proof",
+  });
+  assert.equal(web.SMART_KEFU_CLOUD_API_BASE_URL, "https://kefu.zhenxiliye.cn");
+  assert.equal(web.SMART_KEFU_CLOUD_API_TOKEN, "c".repeat(64));
+  assert.equal(web.WECHAT_WORK_SECRET, undefined);
+  assert.equal(web.DATABASE_URL, undefined);
 });
 
 test("electron-builder uses explicit application and service whitelists", () => {
@@ -166,6 +231,7 @@ test("electron-builder uses explicit application and service whitelists", () => 
   assert.match(config, /apps\/electron\/desktop-session-refresh\.js/);
   assert.match(config, /\.package-provenance\.json/);
   assert.match(config, /packages\/runtime\/service-environment\.js/);
+  assert.match(config, /from: config[\s\S]*?to: cloud[\s\S]*?cloud-client\.env/);
   assert.match(config, /from: dist\/apps\/api/);
   assert.match(config, /from: apps\/web\/\.next\/standalone/);
   assert.match(config, /from: packages\/rules/);
@@ -178,6 +244,9 @@ test("electron-builder uses explicit application and service whitelists", () => 
   assert.match(config, /from: packages\/runtime/);
   assert.match(config, /to: packages\/runtime/);
   assert.match(config, /from: node_modules\/\.prisma\/client/);
+  assert.match(config, /!\*\*\/\*\.tmp\*/);
+  assert.match(config, /!\*\*\/query_engine-\*\.tmp\*/);
+  assert.match(config, /!\*\*\/libquery_engine-\*\.tmp\*/);
   assert.match(config, /from: \.package-runtime\/node_modules/);
   assert.match(config, /to: services\/runtime-root\/node_modules/);
   for (const exclusion of ["!.env", "!.runtime/**", "!storage/**", "!logs/**", "!*.log"]) {
@@ -188,6 +257,53 @@ test("electron-builder uses explicit application and service whitelists", () => 
 
   const verifier = fs.readFileSync(path.join(root, "tools", "verify-windows-package.js"), "utf8");
   assert.match(verifier, /\/apps\/electron\/desktop-session-refresh\.js/);
+});
+
+test("packaged desktop opens the first enterprise setup until private WeCom config is complete", (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "smart-kefu-first-setup-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const envFile = path.join(directory, "runtime.env");
+  assert.equal(desktopEnvRequiresEnterpriseSetup({ envFile, env: {} }), true);
+  fs.writeFileSync(envFile, [
+    "WECHAT_WORK_CORP_ID=ww-company",
+    "WECHAT_WORK_SECRET=secret-value",
+    "WECHAT_WORK_TOKEN=callback-token",
+    `WECHAT_WORK_ENCODING_AES_KEY=${"a".repeat(43)}`,
+    "WECHAT_WORK_OPEN_KFID=wk-account",
+    "WECHAT_SEND_ADAPTER=wechat_work_kf",
+  ].join("\n"), "utf8");
+  assert.equal(desktopEnvRequiresEnterpriseSetup({ envFile, env: {} }), false);
+
+  const main = fs.readFileSync(path.join(root, "apps", "electron", "main.js"), "utf8");
+  assert.match(main, /\/integrations\/wechat-work\/settings\?onboarding=1/);
+});
+
+test("packaged runtime reserves distinct dynamic loopback ports and publishes matching endpoints", async (t) => {
+  const reservations = await reservePackagedServicePorts();
+  t.after(async () => {
+    await Promise.allSettled([reservations.api.release(), reservations.web.release()]);
+  });
+  assert.ok(reservations.api.port > 0);
+  assert.ok(reservations.web.port > 0);
+  assert.notEqual(reservations.api.port, reservations.web.port);
+  const endpoints = createPackagedServiceEndpoints({
+    apiPort: reservations.api.port,
+    webPort: reservations.web.port,
+  });
+  assert.equal(endpoints.apiHealthUrl, `http://127.0.0.1:${reservations.api.port}/api/health`);
+  assert.equal(endpoints.webOverviewUrl, `http://127.0.0.1:${reservations.web.port}/overview`);
+  assert.equal(endpoints.proxyHealthUrl, `http://127.0.0.1:${reservations.web.port}/api/health`);
+});
+
+test("packaged runtime source passes allocated ports to both services and returns the Web endpoint", () => {
+  const runtime = fs.readFileSync(path.join(root, "apps", "electron", "packaged-runtime.js"), "utf8");
+  const main = fs.readFileSync(path.join(root, "apps", "electron", "main.js"), "utf8");
+  assert.match(runtime, /reservePackagedServicePorts\(/);
+  assert.match(runtime, /apiPort: this\.endpoints\.apiPort/);
+  assert.match(runtime, /webPort: this\.endpoints\.webPort/);
+  assert.match(runtime, /return \{ \.\.\.this\.endpoints \}/);
+  assert.match(main, /webUrl = endpoints\.webOverviewUrl/);
+  assert.match(main, /app\.disableHardwareAcceleration\(\)/);
 });
 
 test("NSIS may use a valid x86 bootstrap while the packaged application remains x64-only", (t) => {
@@ -228,6 +344,10 @@ test("package scripts pin the official builder and separate unsigned test from s
 
   const buildScript = fs.readFileSync(path.join(root, "tools", "build-windows-package.js"), "utf8");
   assert.match(buildScript, /prisma:generate/);
+  assert.match(buildScript, /verifyGeneratedPrismaClient/);
+  assert.match(buildScript, /reusing generated Prisma client/);
+  assert.match(buildScript, /cleanGeneratedPrismaTempEngines/);
+  assert.match(buildScript, /PRISMA_STALE_TEMP_ENGINE_FILE/);
   assert.match(buildScript, /build:api/);
   assert.match(buildScript, /build:web/);
   assert.match(buildScript, /prepare-packaged-runtime-dependencies\.js/);
@@ -235,6 +355,7 @@ test("package scripts pin the official builder and separate unsigned test from s
   assert.match(buildScript, /FORCE_WEB_CLEAN_BUILD: "1"/);
   assert.match(buildScript, /process\.env\.npm_execpath/);
   assert.match(buildScript, /smoke-packaged-api\.js/);
+  assert.match(buildScript, /smoke-packaged-desktop-launch\.js/);
   assert.match(buildScript, /sharp-win32-x64-0\.35\.3\.node/);
   assert.match(buildScript, /CSC_IDENTITY_AUTO_DISCOVERY: "false"/);
   assert.match(buildScript, /ELECTRON_BUILDER_CACHE/);
@@ -242,6 +363,14 @@ test("package scripts pin the official builder and separate unsigned test from s
   assert.match(buildScript, /assertCleanRepository/);
   assert.match(buildScript, /writePackageProvenance/);
   assert.match(buildScript, /Repository HEAD changed/);
+});
+
+test("packaging can reuse a schema-matched generated Prisma client without rewriting a locked engine", () => {
+  const source = fs.readFileSync(path.join(root, "tools", "verify-generated-prisma-client.js"), "utf8");
+  assert.match(source, /prismaCli, "format", "--schema", formattedSchema/);
+  assert.match(source, /query_engine-windows\.dll\.node/);
+  assert.match(source, /current !== generated/);
+  assert.match(source, /path\.basename\(resolved\)\.startsWith\("package-prisma-schema-check-"\)/);
 });
 
 test("packaged runtime dependency staging copies the production dependency closure", () => {
@@ -289,6 +418,28 @@ test("packaged smoke waits for child shutdown before another build can replace r
   assert.match(smoke, /validateWebApiReadinessResponse\(/);
   assert.match(smoke, /external_no_cookie_fail_closed/);
   assert.match(smoke, /launch_bound_web_api_hmac/);
+});
+
+test("packaging launches the actual Electron executable while default ports are unavailable", () => {
+  const smoke = fs.readFileSync(path.join(root, "tools", "smoke-packaged-desktop-launch.js"), "utf8");
+  const verifier = fs.readFileSync(path.join(root, "tools", "verify-windows-package.js"), "utf8");
+  assert.match(smoke, /spawn\(executable, \[`--user-data-dir=\$\{userDataPath\}`\]/);
+  assert.match(smoke, /makePortUnavailable\(DEFAULT_WEB_PORT\)/);
+  assert.match(smoke, /makePortUnavailable\(DEFAULT_API_PORT\)/);
+  assert.match(smoke, /waitForRuntimeReady\(statusFile, desktop, 90_000\)/);
+  assert.match(smoke, /desktop\.exitCode !== null/);
+  assert.match(smoke, /terminateProcessTree\(\{ pid \}\)/);
+  assert.match(smoke, /terminateProcessTree\(desktop\)/);
+  assert.match(smoke, /desktop_session_proof_missing/);
+  assert.match(smoke, /selectDesktopLaunchEnvironment/);
+  assert.match(smoke, /Object\.entries\(process\.env\)/);
+  assert.match(smoke, /isSensitiveDesktopEnvironmentKey\(key\)/);
+  assert.match(smoke, /ELECTRON_RUN_AS_NODE/);
+  assert.match(smoke, /INTERNAL_API/);
+  assert.match(smoke, /selected\.TEMP = isolated\.TEMP/);
+  assert.doesNotMatch(smoke, /env: \{ \.\.\.process\.env/);
+  assert.match(verifier, /packaged desktop launch with default ports unavailable/);
+  assert.match(verifier, /packaged-desktop-launch-smoke\.json/);
 });
 
 test("packaged readiness rejects preoccupied 3xx, auth, not-found and unrelated HTTP listeners", async (t) => {
@@ -415,4 +566,9 @@ test("verification rejects packaged secrets and client-data roots", () => {
   assert.equal(isForbiddenResourcePath("/storage/customer.json"), true);
   assert.equal(isForbiddenResourcePath("/services/api/storage/storage.service.js"), false);
   assert.equal(isForbiddenResourcePath("/services/web/node_modules/example/index.js"), false);
+  assert.equal(isPrismaTempEngineFile("/services/runtime-root/node_modules/.prisma/client/query_engine-windows.dll.node.tmp37016"), true);
+  assert.equal(isPrismaTempEngineFile("/services/runtime-root/node_modules/.prisma/client/libquery_engine-windows.dll.node.tmp37016"), true);
+  assert.equal(isPrismaTempEngineFile("/services/runtime-root/node_modules/.prisma/client/query_engine-windows.dll.node"), false);
+  const verifier = fs.readFileSync(path.join(root, "tools", "verify-windows-package.js"), "utf8");
+  assert.match(verifier, /packaged Prisma temp engines/);
 });

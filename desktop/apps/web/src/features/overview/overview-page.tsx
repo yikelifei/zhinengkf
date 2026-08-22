@@ -40,7 +40,11 @@ export type OverviewDestination =
   | "automation"
   | "reviews"
   | "notifications"
-  | "delivery";
+  | "delivery"
+  | "sendQueue"
+  | "sendBlocked"
+  | "wechatSettings"
+  | "wechatFlow";
 
 export type OverviewPageProps = {
   identityFilters?: IdentityFilters;
@@ -58,6 +62,8 @@ export function OverviewPage({ identityFilters, onNavigate }: OverviewPageProps)
     deliveryReadiness,
     notifications,
     notificationsLoaded,
+    agentTasks,
+    agentTasksLoaded,
     busy,
     error,
     refresh,
@@ -78,7 +84,7 @@ export function OverviewPage({ identityFilters, onNavigate }: OverviewPageProps)
     detail: channel.description,
     statusLabel: channelStatusLabel(channel.status),
     tone: channel.ready ? "ready" : channel.status === "needs_config" ? "danger" : "warning",
-    metrics: `${channel.checks.filter((check) => check.passed).length}/${channel.checks.length} 项检查通过`,
+    metrics: `${channel.checks.filter((check) => check.passed).length}/${channel.checks.length} 检查 · ${channel.metrics.queuedSendTasks || 0} 排队 · ${channel.metrics.sendAttentionTasks || 0} 异常`,
   })) ?? [], [channelStatus]);
 
   const actions = useMemo<OverviewAction[]>(() => {
@@ -105,6 +111,29 @@ export function OverviewPage({ identityFilters, onNavigate }: OverviewPageProps)
         count: channelIssues,
         tone: "danger",
         onClick: () => navigate("channels"),
+      });
+    }
+    const queuedSendCount = Number(channelStatus?.summary.queuedSendTasks || 0)
+      + Number(channelStatus?.summary.knownInFlightSendTasks || 0);
+    if (queuedSendCount) {
+      items.push({
+        id: "send-queue",
+        label: "消息发送队列待处理",
+        detail: `${channelStatus?.summary.queuedSendTasks || 0} 项排队，${channelStatus?.summary.knownInFlightSendTasks || 0} 项等待正常回执。`,
+        count: queuedSendCount,
+        tone: "warning",
+        onClick: () => navigate("sendQueue"),
+      });
+    }
+    const sendAttentionCount = Number(channelStatus?.summary.sendAttentionTasks || 0);
+    if (sendAttentionCount) {
+      items.push({
+        id: "send-blocked",
+        label: "消息拦截、失败或投递不确定",
+        detail: `${channelStatus?.summary.blockedSendTasks || 0} 项拦截，${channelStatus?.summary.failedSendTasks || 0} 项失败，${channelStatus?.summary.unknownDeliveryTasks || 0} 项投递结果待人工确认。`,
+        count: sendAttentionCount,
+        tone: "danger",
+        onClick: () => navigate("sendBlocked"),
       });
     }
     const launchPlan = wechatWorkReadiness?.launchPlan;
@@ -177,6 +206,21 @@ export function OverviewPage({ identityFilters, onNavigate }: OverviewPageProps)
       tone: operations ? "ready" : "danger",
     },
     {
+      id: "send",
+      label: "消息待处理",
+      value: channelStatus ? String(channelStatus.summary.sendAttentionTasks || 0) : "—",
+      detail: channelStatus
+        ? `${channelStatus.summary.queuedSendTasks || 0} 项排队，${channelStatus.summary.unknownDeliveryTasks || 0} 项投递不确定`
+        : "发送队列状态未知",
+      tone: !channelStatus
+        ? "danger"
+        : channelStatus.summary.sendAttentionTasks
+          ? "danger"
+          : channelStatus.summary.queuedSendTasks || channelStatus.summary.knownInFlightSendTasks
+            ? "warning"
+            : "ready",
+    },
+    {
       id: "overdue",
       label: "SLA 超时",
       value: operations ? String(operations.summary.overdue) : "—",
@@ -197,7 +241,22 @@ export function OverviewPage({ identityFilters, onNavigate }: OverviewPageProps)
       detail: notificationsLoaded ? "来自当前身份范围" : "通知读取未确认",
       tone: notificationsLoaded ? notifications.some((item) => !item.readAt) ? "warning" : "ready" : "danger",
     },
-  ], [deliveryReadiness, notifications, notificationsLoaded, operations, reviewCenter]);
+    {
+      id: "agent-tasks",
+      label: "Agent 任务",
+      value: agentTasksLoaded ? String(agentTasks.filter((task) => task.status === "awaiting_approval").length) : "—",
+      detail: agentTasksLoaded
+        ? `${agentTasks.filter((task) => task.status === "executing").length} 项执行中，${agentTasks.filter((task) => ["failed", "unknown_outcome"].includes(task.status)).length} 项异常`
+        : "Agent 任务状态未确认",
+      tone: !agentTasksLoaded
+        ? "danger"
+        : agentTasks.some((task) => ["failed", "unknown_outcome"].includes(task.status))
+          ? "danger"
+          : agentTasks.some((task) => task.status === "awaiting_approval")
+            ? "warning"
+            : "ready",
+    },
+  ], [agentTasks, agentTasksLoaded, channelStatus, deliveryReadiness, notifications, notificationsLoaded, operations, reviewCenter]);
 
   const conversations = useMemo<OverviewConversation[]>(() => (operations?.records ?? [])
     .slice()
@@ -232,8 +291,9 @@ export function OverviewPage({ identityFilters, onNavigate }: OverviewPageProps)
         phaseLabel: launchPhaseGroupLabel(item.phase),
         ownerLabel: launchOwnerLabel(item.owner),
         action: item.action,
+        onClick: () => navigate(launchItemDestination(item.key)),
       }));
-  }, [launchPlan]);
+  }, [launchPlan, navigate]);
   const launchTone: OverviewTone = !wechatWorkReadiness
     ? "danger"
     : wechatWorkReadiness.productionReady
@@ -281,4 +341,11 @@ export function OverviewPage({ identityFilters, onNavigate }: OverviewPageProps)
       />
     </section>
   );
+}
+
+function launchItemDestination(key: string): OverviewDestination {
+  if (key === "server_contract_ready") return "delivery";
+  if (key === "live_receive_send_acceptance") return "wechatFlow";
+  if (key === "operator_preflight_ready") return "launch";
+  return "wechatSettings";
 }

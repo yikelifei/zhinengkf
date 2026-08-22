@@ -219,11 +219,19 @@ function blockerGuidance(id: string, source: string, external: boolean) {
 
 @Injectable()
 export class DeliveryReadinessService {
-  getReadiness(runtimeDir = resolveRuntimeDir(), platform = process.platform, now = new Date()) {
-    const projectAudit = loadProjectAudit(runtimeDir);
-    const acceptance = loadLatestAcceptance(runtimeDir);
-    const rawEvidenceReports = loadEvidenceReports(runtimeDir);
-    const releaseCandidateScope = loadReleaseCandidateScope(runtimeDir);
+  getReadiness(runtimeDir?: string, platform = process.platform, now = new Date()) {
+    // Stable desktop state lives in .runtime-stable, while the repository's
+    // delivery/audit commands intentionally write immutable evidence under
+    // .runtime.  An explicit directory (used by isolated tests and release
+    // readers) remains authoritative; the live service resolves the evidence
+    // directory separately so generated reports do not appear to be missing.
+    const evidenceRuntimeDir = runtimeDir
+      ? path.resolve(runtimeDir)
+      : resolveEvidenceRuntimeDir(resolveRuntimeDir());
+    const projectAudit = loadProjectAudit(evidenceRuntimeDir);
+    const acceptance = loadLatestAcceptance(evidenceRuntimeDir);
+    const rawEvidenceReports = loadEvidenceReports(evidenceRuntimeDir);
+    const releaseCandidateScope = loadReleaseCandidateScope(evidenceRuntimeDir);
     const freshness = buildEvidenceFreshness(projectAudit, acceptance, rawEvidenceReports, now);
     const staleEvidenceBlockers = evidenceFreshnessBlockers(freshness, rawEvidenceReports);
     const releaseCandidateBlockers = releaseCandidateScopeBlockers(releaseCandidateScope);
@@ -352,6 +360,13 @@ function commandForPlatform(value: string, platform: NodeJS.Platform | string) {
 
 function resolveRuntimeDir() {
   return path.resolve(process.env.DESKTOP_RUNTIME_DIR || path.resolve(process.cwd(), ".runtime"));
+}
+
+function resolveEvidenceRuntimeDir(fallbackRuntimeDir: string) {
+  const configured = String(process.env.DELIVERY_EVIDENCE_RUNTIME_DIR || "").trim();
+  if (configured) return path.resolve(configured);
+  const repositoryEvidenceDir = path.resolve(process.cwd(), ".runtime");
+  return fs.existsSync(repositoryEvidenceDir) ? repositoryEvidenceDir : fallbackRuntimeDir;
 }
 
 function loadProjectAudit(runtimeDir: string) {

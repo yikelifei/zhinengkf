@@ -11,6 +11,10 @@ const overviewDestinations: Record<OverviewDestination, string> = {
   reviews: "/reviews/inbox",
   notifications: "/notifications",
   delivery: "/settings/delivery-readiness",
+  sendQueue: "/send/queue",
+  sendBlocked: "/send/blocked",
+  wechatSettings: "/integrations/wechat-work/settings",
+  wechatFlow: "/integrations/wechat-work/flow",
 };
 
 export function OverviewRouteFeature() {

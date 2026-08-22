@@ -330,8 +330,34 @@ test("candidate probe only checks trusted loopback health endpoints and does not
       timeoutMs: 500,
       requestHealth: async (url, timeoutMs) => {
         requests.push({ url, timeoutMs });
+        if (url === "http://127.0.0.1:31870/api/health") {
+          return {
+            statusCode: 200,
+            data: {
+              ok: true,
+              data: {
+                service: "zhenxi-ai",
+                status: "ok",
+                runtime: { channel: "customer", generationBackend: "supabase-edge", localWorkspace: true },
+                ai: { imageConfigured: false },
+              },
+            },
+          };
+        }
         if (url === "http://127.0.0.1:31871/api/health") {
-          return { statusCode: 200, data: { ok: true, data: { service: "zhenxi-ai", status: "ok", version: "0.1.26" } } };
+          return {
+            statusCode: 200,
+            data: {
+              ok: true,
+              data: {
+                service: "zhenxi-ai",
+                status: "ok",
+                version: "0.1.26",
+                runtime: { channel: "internal", generationBackend: "server", localWorkspace: true },
+                ai: { imageConfigured: true, imageModel: "gpt-image-2", imageApiType: "openai_images", gptImageModel: true },
+              },
+            },
+          };
         }
         return { statusCode: 200, data: { ok: true, service: "other", status: "ok" } };
       },
@@ -350,7 +376,12 @@ test("candidate probe only checks trusted loopback health endpoints and does not
       "http://127.0.0.1:31871/api/health",
     ]);
     assert.ok(requests.every((request) => request.timeoutMs === 500));
+    assert.equal(report.candidates.find((candidate) => candidate.baseUrl.endsWith(":31870")).generationReady, false);
+    assert.equal(report.candidates.find((candidate) => candidate.baseUrl.endsWith(":31870")).imageConfigured, false);
+    assert.match(report.candidates.find((candidate) => candidate.baseUrl.endsWith(":31870")).errorMessage, /图片模型/);
+    assert.equal(report.candidates.find((candidate) => candidate.baseUrl.endsWith(":31871")).generationReady, true);
     assert.equal(report.candidates.find((candidate) => candidate.baseUrl.endsWith(":31871")).version, "0.1.26");
+    assert.equal(report.candidates.find((candidate) => candidate.baseUrl.endsWith(":31871")).imageModel, "gpt-image-2");
     assert.equal(JSON.stringify(report).includes("Authorization"), false);
     assert.equal(JSON.stringify(requests).includes("local-generate"), false);
   } finally {

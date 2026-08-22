@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import type { WechatWorkLaunchPlanItem, WechatWorkProductionReadiness } from "../../lib/api";
 import styles from "./integration-pages.module.css";
 
@@ -36,6 +37,7 @@ function LaunchPlanGroup({ title, items }: { title: string; items: WechatWorkLau
               <strong>{item.title}</strong>
               <small>{item.detail}</small>
               <small>{item.action}</small>
+              <small><Link href={launchItemHref(item.key)}>打开处理页面</Link></small>
             </span>
             <em>{ownerLabel(item.owner)} · {readinessStatusLabel(item.status)}</em>
           </li>
@@ -43,6 +45,13 @@ function LaunchPlanGroup({ title, items }: { title: string; items: WechatWorkLau
       </ol>
     </section>
   );
+}
+
+function launchItemHref(key: string) {
+  if (key === "server_contract_ready") return "/settings/delivery-readiness";
+  if (key === "live_receive_send_acceptance") return "/integrations/wechat-work/flow";
+  if (key === "operator_preflight_ready") return "/integrations/wechat-work";
+  return "/integrations/wechat-work/settings";
 }
 
 function readinessStatusLabel(status: string) {

@@ -17,7 +17,7 @@ export function channelStatusLabel(status: string) {
 
 export function conversationStateLabel(conversation: ConversationOperationsQueue["records"][number]) {
   if (conversation.isOverdue) return "SLA 超时";
-  if (conversation.manualLocked) return "人工接管";
+  if (conversation.manualLocked) return "人工关注";
   if (conversation.assignmentState === "unassigned") return "待分配";
   if (Number(conversation.unreadCount || 0) > 0) return "有新消息";
   return conversation.assignee || "AI 托管";

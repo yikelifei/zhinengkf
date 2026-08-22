@@ -133,7 +133,7 @@ export function SalesOrderMessagePage({ orderId, kind }: { orderId: string; kind
           <Link className={styles.backLink} href={`/sales/orders/${encodeURIComponent(selected.id)}`} data-action-id="sales-order-message-back">返回订单详情</Link>
         </article>
       ) : <SalesEmpty title={loaded ? "没有找到订单" : "订单状态未确认"} detail={loaded ? "读取成功；请返回订单列表重新选择。" : "订单列表尚未成功读取，已阻止消息入队。"} />}
-      {confirming && selected ? <SalesConfirmation title={`确认把${copy.label}加入发送队列？`} detail={`${identityLabel(expected)}。系统会创建真实微信发送任务，且不会自动解除人工接管锁。`} confirmLabel="确认入队" confirmActionId={`sales-order-${kind}-confirm`} cancelActionId={`sales-order-${kind}-cancel`} busy={busy} onCancel={() => setConfirming(false)} onConfirm={() => void queueMessage()} /> : null}
+      {confirming && selected ? <SalesConfirmation title={`确认把${copy.label}加入发送队列？`} detail={`${identityLabel(expected)}。系统会创建真实微信发送任务，且不会自动修改历史人工锁状态。`} confirmLabel="确认入队" confirmActionId={`sales-order-${kind}-confirm`} cancelActionId={`sales-order-${kind}-cancel`} busy={busy} onCancel={() => setConfirming(false)} onConfirm={() => void queueMessage()} /> : null}
     </section>
   );
 }

@@ -73,6 +73,10 @@ test("WeChat Work production readiness accepts implemented Prisma persistence", 
     assert.equal(externalCheck(report, "public_callback_url").status, "blocked");
     assert.equal(report.launchPlan.duringIcp.every((item) => item.phase === "during_icp"), true);
     assert.equal(report.launchPlan.duringIcp.find((item) => item.key === "server_contract_ready").status, "ready");
+    assert.match(
+      report.launchPlan.afterIcp.find((item) => item.key === "public_https_callback").action,
+      /企业微信后台提交回调校验.*callback_accepted/,
+    );
     assert.equal(report.launchPlan.afterIcp.find((item) => item.key === "live_receive_send_acceptance").status, "blocked");
   } finally {
     Object.assign(appConfig, original);
@@ -89,6 +93,10 @@ test("WeChat Work production readiness keeps local JSON mode out of production-r
     assert.match(persistenceCheck(report).detail, /local\/demo mode/);
     assert.equal(report.launchPlan.currentPhase, "local_configuring");
     assert.equal(report.launchPlan.duringIcp.find((item) => item.key === "server_contract_ready").status, "missing");
+    assert.match(
+      report.launchPlan.duringIcp.find((item) => item.key === "server_contract_ready").action,
+      /PostgreSQL.*Prisma.*USE_LOCAL_STORE=false.*不能只修改 \.env/,
+    );
     assert.equal(report.productionReady, false);
   } finally {
     Object.assign(appConfig, original);

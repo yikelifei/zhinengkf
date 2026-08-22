@@ -6,8 +6,6 @@ import {
   ChevronDown,
   CircleX,
   MoreHorizontal,
-  Image as ImageIcon,
-  Paperclip,
   PanelRightOpen,
   RefreshCw,
   ShieldCheck,
@@ -20,12 +18,16 @@ import { ConversationAssistantComposer } from "./conversation-assistant-composer
 import { ConversationWorkflowRail } from "./conversation-workflow-rail";
 import type {
   ConversationWorkbenchActions,
-  ConversationWorkbenchAttachment,
   ConversationWorkbenchMessage,
   ConversationWorkbenchThread,
 } from "./types";
 import { WorkbenchAvatar, WorkbenchToneTag } from "./workbench-primitives";
 import { IncidentCard } from "./conversation-thread-incident";
+import {
+  ConversationTimelineAttachment,
+  ConversationTimelineStructuredContent,
+} from "./conversation-timeline-content";
+import messageStyles from "./conversation-timeline-content.module.css";
 
 type ConversationThreadPaneProps = {
   thread: ConversationWorkbenchThread | null;
@@ -156,7 +158,7 @@ export function ConversationThreadPane({
           <ShieldCheck size={14} aria-hidden="true" />{thread.safetyNotice}
         </div>
       ) : null}
-      {thread.workflowActions?.length ? <ConversationWorkflowRail actions={thread.workflowActions} /> : null}
+      {thread.workflowActions?.length ? <ConversationWorkflowRail actions={thread.workflowActions} compact={variant === "wecom"} /> : null}
 
       <section
         ref={timelineRef}
@@ -234,18 +236,16 @@ function TimelineMessage({ message }: { message: ConversationWorkbenchMessage })
       </div>
     );
   }
+  const hasText = Boolean(message.text?.trim());
   return (
     <article className={`${styles.messageRow} ${message.direction === "outbound" ? styles.outboundMessage : ""}`.trim()}>
       {message.avatar ? <WorkbenchAvatar avatar={message.avatar} size="small" /> : null}
       <div className={styles.messageBlock}>
-        <div className={styles.messageBubble}>
-          {message.senderName ? <strong>{message.senderName}</strong> : null}
-          {message.text ? <p>{message.text}</p> : null}
-          {message.attachments?.length ? (
-            <div className={styles.attachmentList}>
-              {message.attachments.map((attachment) => <TimelineAttachment attachment={attachment} key={attachment.id} />)}
-            </div>
-          ) : null}
+        {message.senderName ? <span className={messageStyles.messageSender}>{message.senderName}</span> : null}
+        <div className={messageStyles.messageContentStack}>
+          {hasText ? <div className={styles.messageBubble}><p>{message.text}</p></div> : null}
+          {message.content ? <ConversationTimelineStructuredContent content={message.content} /> : null}
+          {message.attachments?.map((attachment) => <ConversationTimelineAttachment attachment={attachment} key={attachment.id} />)}
         </div>
         <span className={styles.messageMeta}>
           <time>{message.createdAtLabel}</time>
@@ -254,24 +254,4 @@ function TimelineMessage({ message }: { message: ConversationWorkbenchMessage })
       </div>
     </article>
   );
-}
-
-function TimelineAttachment({ attachment }: { attachment: ConversationWorkbenchAttachment }) {
-  if (attachment.previewUrl) {
-    return (
-      <a className={styles.imageAttachment} href={attachment.href || attachment.previewUrl} target="_blank" rel="noreferrer" aria-label={`查看图片 ${attachment.name}`}>
-        <img src={attachment.previewUrl} alt={attachment.name} loading="lazy" />
-        <span><b>{attachment.name}</b>{attachment.detail ? <small>{attachment.detail}</small> : null}</span>
-      </a>
-    );
-  }
-  const content = (
-    <>
-      {attachment.kind === "image" ? <ImageIcon size={14} aria-hidden="true" /> : <Paperclip size={14} aria-hidden="true" />}
-      <span><b>{attachment.name}</b>{attachment.detail ? <small>{attachment.detail}</small> : null}</span>
-    </>
-  );
-  return attachment.href ? (
-    <a href={attachment.href} target="_blank" rel="noreferrer" aria-label={`打开附件 ${attachment.name}`}>{content}</a>
-  ) : <span>{content}</span>;
 }

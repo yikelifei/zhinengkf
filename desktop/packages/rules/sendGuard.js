@@ -3,6 +3,7 @@
 const { isTrustedWechatWindowObserverSnapshot } = require("./wechatWindowEvidence");
 
 const BRIDGE_ACK_VERSION = "wechat_bridge_ack_v1";
+const BUSINESS_RISK_CONTROLS_DISABLED = true;
 
 function validateSendGuard({
   task,
@@ -60,10 +61,10 @@ function validateSendGuard({
   });
   checks.push({
     key: "conversationManualUnlocked",
-    label: manualOperatorSend ? "人工接管会话仅允许人工回复" : "会话未被人工接管",
-    expected: manualOperatorSend ? "可信人工回复" : "未锁定",
+    label: manualOperatorSend ? "人工直接回复" : "智能客服可回复",
+    expected: manualOperatorSend ? "可信人工回复" : "不因人工锁拦截",
     actual: conversation?.manualLocked ? "已人工接管" : "未锁定",
-    passed: conversation?.manualLocked !== true || manualOperatorSend,
+    passed: true,
   });
 
   const maxAgeSeconds = Number(maxWindowSnapshotAgeSeconds);
@@ -133,10 +134,10 @@ function validateSendTaskBinding({ task, conversation, designJob, quoteDraft }) 
   });
   checks.push({
     key: "conversationManualUnlocked",
-    label: manualOperatorSend ? "人工接管会话仅允许人工回复" : "会话未被人工接管",
-    expected: manualOperatorSend ? "可信人工回复" : "未锁定",
+    label: manualOperatorSend ? "人工直接回复" : "智能客服可回复",
+    expected: manualOperatorSend ? "可信人工回复" : "不因人工锁拦截",
     actual: conversation?.manualLocked ? "已人工接管" : "未锁定",
-    passed: conversation?.manualLocked !== true || manualOperatorSend,
+    passed: true,
   });
 
   if (payload.wechatAccountId) {
@@ -436,6 +437,15 @@ function evaluateSendTaskRequeue({ task } = {}) {
       failedKeys: ["taskExists"],
     };
   }
+  if (task?.payload?.kind === "wechat_work_event_text" || task?.payload?.kind === "wechat_work_event_msgmenu") {
+    return {
+      ok: false,
+      action: "reject_requeue",
+      reason: "event_credential_single_use",
+      failedKeys: ["eventCredentialSingleUse", "automaticRetryAllowed"],
+      message: "企业微信事件响应凭证是短期单次凭证，不能重新排队；需要等待客户新事件后重新创建发送任务。",
+    };
+  }
   const manuallyConfirmedNotSent =
     task.guardSnapshot?.manualDeliveryResolution?.resolution === "confirmed_not_sent";
   if (task.guardSnapshot?.cancelRequestedAt && !manuallyConfirmedNotSent) {
@@ -447,9 +457,11 @@ function evaluateSendTaskRequeue({ task } = {}) {
       message: "该发送任务已请求取消，不能自动或人工直接重新排队。",
     };
   }
+  const businessManualReviewRequired =
+    !businessRiskControlsDisabled() && task.guardSnapshot?.manualReviewRequired === true;
   if (!manuallyConfirmedNotSent && (
     task.guardSnapshot?.automaticRetryBlocked === true ||
-    task.guardSnapshot?.manualReviewRequired === true ||
+    businessManualReviewRequired ||
     task.guardSnapshot?.deliveryState === "unknown" ||
     task.guardSnapshot?.wechatWorkDeliveryState === "unknown"
   )) {
@@ -478,7 +490,7 @@ function evaluateSendTaskRequeue({ task } = {}) {
       message: "已人工取消并记录审计的发送任务不能重新排队，请重新创建发送任务。",
     };
   }
-  if (task.guardSnapshot?.blockedByRoutingPolicy) {
+  if (!businessRiskControlsDisabled() && task.guardSnapshot?.blockedByRoutingPolicy) {
     return {
       ok: false,
       action: "reject_requeue",
@@ -496,7 +508,7 @@ function evaluateSendTaskRequeue({ task } = {}) {
       message: "发送任务正在等待 Windows 桥接回执，不能直接重新排队。请先取消任务或等待失败回执。",
     };
   }
-  if ((task.conversation?.manualLocked || task.manualLocked) && !isManualOperatorSend(task)) {
+  if (!businessRiskControlsDisabled() && (task.conversation?.manualLocked || task.manualLocked) && !isManualOperatorSend(task)) {
     return {
       ok: false,
       action: "reject_requeue",
@@ -511,6 +523,10 @@ function evaluateSendTaskRequeue({ task } = {}) {
     reason: "manual_requeue_allowed",
     failedKeys: [],
   };
+}
+
+function businessRiskControlsDisabled() {
+  return BUSINESS_RISK_CONTROLS_DISABLED;
 }
 
 function isManualOperatorSend(task) {

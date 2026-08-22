@@ -12,13 +12,13 @@ import {
   maxWechatWorkInboundMediaBytes,
 } from "./wechat-work-inbound-media";
 
-const UNDERSTANDING_CACHE_VERSION = 1;
+const UNDERSTANDING_CACHE_VERSION = 2;
 const MAX_TRANSCRIPTION_UPLOAD_BYTES = 24 * 1024 * 1024;
 const MAX_MEDIA_PROCESS_SECONDS = 600;
 const PROCESS_TIMEOUT_MS = 30_000;
 
 export type WechatWorkMediaUnderstanding = {
-  version: 1;
+  version: 2;
   status: "understood" | "manual_review";
   kind: "image" | "voice" | "video" | "file";
   contextText?: string;
@@ -378,6 +378,8 @@ function visionPrompt(subject: string) {
   return [
     `请理解${subject}，为伴手礼行业客服提供本轮对话上下文。`,
     "准确提取：产品类型、包装、颜色、材质、尺寸、数量、预算、Logo/文字、使用场景、客户明确提出的问题或修改要求，以及截图中的关键文字。",
+    "若画面包含海报、腰封、吊牌或贺卡，必须识别实际物料的类型和成品外轮廓；贺卡请明确写成“贺卡外轮廓：正方形（1:1）”“贺卡外轮廓：横向”“贺卡外轮廓：竖向”或“贺卡外轮廓：无法判断”。",
+    "判断物料外轮廓时只看贺卡、腰封或吊牌本身，不要把整张截图、聊天界面、桌面背景或拍摄画面的横竖比例当成物料比例。",
     "看不清的内容明确写看不清；不要猜价格、库存、交期、购买意图或图片外的信息。",
     "只输出一段简短中文事实摘要，不要给客户回复，不要输出分析过程。",
   ].join("\n");

@@ -52,12 +52,20 @@ type DesignPlatformCandidateProbeRequest = (
 type DesignPlatformCandidateProbe = {
   baseUrl: string;
   ok: boolean;
+  generationReady: boolean;
   selected: boolean;
   latencyMs: number;
   statusCode?: number;
   service?: string;
   status?: string;
   version?: string;
+  runtimeChannel?: string;
+  generationBackend?: string;
+  localWorkspace?: boolean;
+  imageConfigured?: boolean;
+  imageModel?: string;
+  imageApiType?: string;
+  gptImageModel?: boolean;
   errorMessage?: string;
 };
 
@@ -417,7 +425,10 @@ export async function probeDesignPlatformCandidates(options: {
   const candidates = await Promise.all(
     candidateBaseUrls.map((baseUrl) => probeOneDesignPlatformCandidate(baseUrl, selectedBaseUrl, timeoutMs, requestHealth)),
   );
-  const recommendedBaseUrl = candidates.find((candidate) => candidate.ok)?.baseUrl || "";
+  const recommendedBaseUrl =
+    candidates.find((candidate) => candidate.ok && candidate.generationReady)?.baseUrl ||
+    candidates.find((candidate) => candidate.ok)?.baseUrl ||
+    "";
   return {
     ok: candidates.some((candidate) => candidate.ok),
     adapter: appConfig.designPlatformAdapter,
@@ -443,21 +454,33 @@ async function probeOneDesignPlatformCandidate(
       response.statusCode < 300 &&
       health.service === "zhenxi-ai" &&
       (health.status === "ok" || health.ok === true);
+    const generationReady = candidateGenerationReady(health);
     return {
       baseUrl,
       ok,
+      generationReady: ok && generationReady,
       selected: baseUrl === selectedBaseUrl,
       latencyMs: Date.now() - startedAt,
       statusCode: response.statusCode,
       service: health.service,
       status: health.status,
       version: health.version,
-      errorMessage: ok ? undefined : "未确认这是可用的臻希 AI 本地服务",
+      runtimeChannel: health.runtimeChannel,
+      generationBackend: health.generationBackend,
+      localWorkspace: health.localWorkspace,
+      imageConfigured: health.imageConfigured,
+      imageModel: health.imageModel,
+      imageApiType: health.imageApiType,
+      gptImageModel: health.gptImageModel,
+      errorMessage: ok
+        ? generationReady ? undefined : "臻希 AI 本地服务在线，但图片模型未配置或不是 GPT 图片模型"
+        : "未确认这是可用的臻希 AI 本地服务",
     };
   } catch (error) {
     return {
       baseUrl,
       ok: false,
+      generationReady: false,
       selected: baseUrl === selectedBaseUrl,
       latencyMs: Date.now() - startedAt,
       errorMessage: safeCandidateProbeError(error),
@@ -478,12 +501,27 @@ async function requestDesignPlatformCandidateHealth(url: string, timeoutMs: numb
 function unwrapCandidateHealth(value: unknown) {
   const root = isRecord(value) ? value : {};
   const data = isRecord(root.data) ? root.data : root;
+  const runtime = isRecord(data.runtime) ? data.runtime : {};
+  const ai = isRecord(data.ai) ? data.ai : {};
   return {
     ok: typeof root.ok === "boolean" ? root.ok : typeof data.ok === "boolean" ? data.ok : undefined,
     service: stringOrUndefined(data.service) || stringOrUndefined(root.service) || "",
     status: stringOrUndefined(data.status) || stringOrUndefined(root.status) || "",
     version: stringOrUndefined(data.version) || stringOrUndefined(root.version) || "",
+    runtimeChannel: stringOrUndefined(runtime.channel),
+    generationBackend: stringOrUndefined(runtime.generationBackend),
+    localWorkspace: typeof runtime.localWorkspace === "boolean" ? runtime.localWorkspace : undefined,
+    imageConfigured: typeof ai.imageConfigured === "boolean" ? ai.imageConfigured : undefined,
+    imageModel: stringOrUndefined(ai.imageModel),
+    imageApiType: stringOrUndefined(ai.imageApiType),
+    gptImageModel: typeof ai.gptImageModel === "boolean" ? ai.gptImageModel : undefined,
   };
+}
+
+function candidateGenerationReady(health: ReturnType<typeof unwrapCandidateHealth>) {
+  if (health.imageConfigured === false || health.gptImageModel === false) return false;
+  if (health.imageConfigured === true || health.gptImageModel === true) return true;
+  return true;
 }
 
 function trustedDesignPlatformCandidateBaseUrls(values: string[]) {

@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
-import { BadRequestException } from "@nestjs/common";
+import path from "node:path";
+import { BadRequestException, ConflictException, Injectable } from "@nestjs/common";
 import { LocalStoreService } from "../local-store/local-store.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { appConfig } from "../shared/app-config";
@@ -16,12 +17,20 @@ import {
   readRequestOperationMetadata,
   requestOperationMetadata,
 } from "../shared/operation-idempotency";
+import {
+  conversationTimelineTaskPartStatus,
+  conversationTimelineTaskParts,
+  conversationTimelineMessagePresentation,
+  normalizeConversationTimelineAttachments,
+} from "../shared/conversation-message-presentation";
 
 type IdentityFilter = {
   wechatAccountId?: string;
   conversationId?: string;
   customerId?: string;
 };
+
+const { getToolDefinition } = require(path.join(process.cwd(), "packages", "rules"));
 
 const taskInclude = {
   wechatAccount: true,
@@ -40,11 +49,18 @@ const attemptInclude = {
   windowSnapshot: true,
 } as const;
 
+const agentTaskInclude = {
+  steps: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] },
+  approvals: { orderBy: [{ requestedAt: "desc" }, { id: "desc" }] },
+  toolExecutions: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] },
+} as const;
+
 /**
  * Keeps the existing local-json contract while making the same WeChat records
  * durable in PostgreSQL. Business validation remains in WechatDispatchService;
  * this class owns persistence, hydration and short database transactions only.
  */
+@Injectable()
 export class WechatPersistence {
   constructor(
     private readonly prisma: PrismaService,
@@ -102,6 +118,25 @@ export class WechatPersistence {
     const prisma = this.prisma as any;
     try {
       return await prisma.$transaction(async (tx: any) => {
+        const expectedWechatAccountId = String(payload.wechatAccountId || "").trim();
+        if (!expectedWechatAccountId) {
+          throw new BadRequestException("inbound message commit requires a WeChat account binding");
+        }
+        const lockTime = new Date();
+        const accountLock = await tx.wechatAccount.updateMany({
+          where: { id: expectedWechatAccountId },
+          data: { updatedAt: lockTime },
+        });
+        if (accountLock.count !== 1) {
+          throw new BadRequestException("inbound message WeChat account binding changed before commit");
+        }
+        const conversationLock = await tx.conversation.updateMany({
+          where: { id: payload.conversationId, wechatAccountId: expectedWechatAccountId },
+          data: { updatedAt: lockTime },
+        });
+        if (conversationLock.count !== 1) {
+          throw new BadRequestException("inbound message conversation binding changed before commit");
+        }
         await this.fenceInboundTransaction(tx, payload.inboundFence, "inbound message commit");
         const conversation = await tx.conversation.findUnique({
           where: { id: payload.conversationId },
@@ -299,6 +334,15 @@ export class WechatPersistence {
     }
   }
 
+  async getInboundMessageOperation(wechatAccountId: string, externalId: string) {
+    if (this.isLocal) {
+      return this.localStore.getInboundMessageOperation(wechatAccountId, externalId);
+    }
+    return (this.prisma as any).inboundMessageOperation.findUnique({
+      where: { wechatAccountId_externalId: { wechatAccountId, externalId } },
+    });
+  }
+
   async advanceInboundOperation(id: string, claimToken: string, patch: Record<string, unknown>) {
     if (this.isLocal) return this.localStore.updateInboundMessageOperation(id, claimToken, patch);
     const prisma = this.prisma as any;
@@ -422,36 +466,74 @@ export class WechatPersistence {
     const timelineAssets = taskAssetIds.length
       ? await (this.prisma as any).designAsset.findMany({ where: { id: { in: taskAssetIds } } })
       : [];
+    const timelineAttempts = tasks.length
+      ? await (this.prisma as any).wechatSendAttempt.findMany({
+          where: { sendTaskId: { in: tasks.map((task: any) => task.id) } },
+          orderBy: [{ startedAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+        })
+      : [];
+    const latestAttemptByTask = new Map<string, any>();
+    for (const attempt of timelineAttempts) {
+      if (!latestAttemptByTask.has(String(attempt.sendTaskId))) {
+        latestAttemptByTask.set(String(attempt.sendTaskId), attempt);
+      }
+    }
     return [
       ...messages
         .filter((message: any) => isTrustedTimelineMessage(message, rpaMessageIds))
-        .map((message: any) => ({
-        ...message,
-        source: "message",
-        customerId: conversation.customerId,
-        wechatAccountId: conversation.wechatAccountId,
-        status: message.direction === "inbound" ? (message.readAt ? "read" : "unread") : "sent",
-        attachments: this.timelineAttachments(message.attachments, message.readAt ? "read" : "received"),
-      })),
+        .map((message: any) => {
+          const presentation = conversationTimelineMessagePresentation(message);
+          return {
+            ...message,
+            source: "message",
+            customerId: conversation.customerId,
+            wechatAccountId: conversation.wechatAccountId,
+            text: presentation.displayText,
+            messageType: presentation.messageType,
+            content: presentation.content,
+            status: message.direction === "inbound" ? (message.readAt ? "read" : "unread") : "sent",
+            attachments: this.timelineAttachments(message.attachments, message.readAt ? "read" : "received"),
+          };
+        }),
       ...tasks
         .filter((task: any) => !isSyntheticTimelineText(task.payload?.text || task.payload?.textBeforeImages || task.payload?.textBeforeFiles))
-        .map((task: any) => ({
-        id: `send-task:${task.id}`,
-        source: "send_task",
-        sendTaskId: task.id,
-        conversationId: conversation.id,
-        customerId: conversation.customerId,
-        wechatAccountId: conversation.wechatAccountId,
-        direction: "outbound",
-        text: String(task.payload?.text || task.payload?.textBeforeImages || task.payload?.textBeforeFiles || ""),
-        attachments: this.timelineTaskAttachments(task, timelineAssets),
-        status: task.status || "queued",
-        errorMessage: task.errorMessage || "",
-        createdAt: task.queuedAt || task.createdAt,
-        updatedAt: task.updatedAt || task.createdAt,
-        sentAt: task.sentAt || null,
-        metadata: { kind: task.payload?.kind || "text", manualReply: task.payload?.source === "manual_reply" },
-      })),
+        .flatMap((task: any) => {
+          const parts = conversationTimelineTaskParts(task.payload);
+          const latestAttempt = latestAttemptByTask.get(String(task.id));
+          const base = {
+            source: "send_task",
+            sendTaskId: task.id,
+            conversationId: conversation.id,
+            customerId: conversation.customerId,
+            wechatAccountId: conversation.wechatAccountId,
+            direction: "outbound",
+            status: task.status || "queued",
+            errorMessage: task.errorMessage || "",
+            createdAt: task.queuedAt || task.createdAt,
+            updatedAt: task.updatedAt || task.createdAt,
+            sentAt: task.sentAt || null,
+            metadata: { kind: task.payload?.kind || "text", manualReply: task.payload?.source === "manual_reply" },
+          };
+          if (!parts.length) return [{
+            ...base,
+            id: `send-task:${task.id}`,
+            text: String(task.payload?.text || task.payload?.textBeforeImages || task.payload?.textBeforeFiles || ""),
+            attachments: this.timelineTaskAttachments(task, timelineAssets),
+          }];
+          return parts.map((part, index) => {
+            const partStatus = conversationTimelineTaskPartStatus(task.status, latestAttempt?.metadata, index);
+            return {
+              ...base,
+              id: `send-task:${task.id}:${String(index + 1).padStart(2, "0")}`,
+              text: part.text,
+              messageType: part.messageType,
+              content: part.content,
+              status: partStatus,
+              errorMessage: partStatus === "sent" ? "" : base.errorMessage,
+              attachments: this.timelineAttachments(part.attachments, partStatus),
+            };
+          });
+        }),
     ]
       .sort((left: any, right: any) => {
         const byTime = new Date(left.createdAt || 0).getTime() - new Date(right.createdAt || 0).getTime();
@@ -586,6 +668,276 @@ export class WechatPersistence {
     });
   }
 
+  async listAgentTasks(filter: IdentityFilter & { status?: string; limit?: number } = {}) {
+    if (this.isLocal) return this.localStore.listAgentTasks(filter);
+    const where: any = {
+      ...(filter.wechatAccountId ? { wechatAccountId: filter.wechatAccountId } : {}),
+      ...(filter.conversationId ? { conversationId: filter.conversationId } : {}),
+      ...(filter.customerId ? { customerId: filter.customerId } : {}),
+      ...(filter.status ? { status: filter.status } : {}),
+    };
+    const rows = await (this.prisma as any).agentTask.findMany({
+      where,
+      include: agentTaskInclude,
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+      take: Math.max(1, Math.min(Number(filter.limit || 100), 500)),
+    });
+    return rows.map((task: any) => this.hydrateAgentTask(task));
+  }
+
+  async getAgentTask(id: string) {
+    if (this.isLocal) return this.localStore.getAgentTask(id);
+    const task = await (this.prisma as any).agentTask.findUnique({
+      where: { id: String(id || "") },
+      include: agentTaskInclude,
+    });
+    return task ? this.hydrateAgentTask(task) : null;
+  }
+
+  async createAgentTask(payload: any = {}) {
+    if (this.isLocal) return this.localStore.createAgentTask(payload);
+    const operationKey = normalizeOperationKey(payload.operationKey || payload.id || "agent-task", "agent task operationKey");
+    const taskId = String(payload.id || deterministicOperationId("agent_task", operationKey));
+    const prisma = this.prisma as any;
+    const existing = await prisma.agentTask.findUnique({ where: { operationKey }, include: agentTaskInclude });
+    if (existing) {
+      this.assertAgentTaskReplay(existing, payload, operationKey);
+      return this.hydrateAgentTask(existing);
+    }
+    const identity = payload.identity || payload;
+    try {
+      const task = await prisma.$transaction(async (tx: any) => {
+        const replay = await tx.agentTask.findUnique({ where: { operationKey }, include: agentTaskInclude });
+        if (replay) {
+          this.assertAgentTaskReplay(replay, payload, operationKey);
+          return replay;
+        }
+        return tx.agentTask.create({
+          data: {
+            id: taskId,
+            operationKey,
+            status: String(payload.status || "created"),
+            taskType: String(payload.taskType || "customer_service"),
+            lane: payload.lane || null,
+            routeAction: payload.routeAction || null,
+            planType: payload.planType || null,
+            reason: payload.reason || null,
+            objective: payload.objective || null,
+            wechatAccountId: identity.wechatAccountId || null,
+            conversationId: identity.conversationId || null,
+            customerId: identity.customerId || null,
+            routeId: payload.createdFrom?.routeId || payload.routeId || null,
+            inboundMessageId: payload.createdFrom?.inboundMessageId || payload.inboundMessageId || null,
+            currentStep: payload.nextStep || payload.currentStep || null,
+            payload: this.jsonOrNull(payload.payload || payload),
+            handoff: this.jsonOrNull(payload.handoff),
+            steps: {
+              create: (Array.isArray(payload.steps) ? payload.steps : []).map((step: any) => ({
+                id: deterministicOperationId("agent_step", `${taskId}:${String(step.key || "step")}`),
+                stepKey: String(step.key || "step"),
+                status: String(step.status || "planned"),
+                mode: step.mode || null,
+                toolName: step.tool || step.toolName || null,
+                idempotencyKey: step.idempotencyKey || null,
+                input: this.jsonOrNull(step.input),
+                output: this.jsonOrNull(step.output),
+              })),
+            },
+            toolExecutions: {
+              create: (Array.isArray(payload.steps) ? payload.steps : [])
+                .filter((step: any) => String(step.tool || step.toolName || "").trim())
+                .map((step: any) => {
+                  const toolName = String(step.tool || step.toolName || "").trim();
+                  const definition = getToolDefinition(toolName) || {};
+                  const toolOperationKey = `${operationKey}:${String(step.key || "step")}:tool`;
+                  return {
+                    id: deterministicOperationId("agent_tool_execution", toolOperationKey),
+                    stepKey: String(step.key || "step"),
+                    operationKey: toolOperationKey,
+                    toolName,
+                    toolVersion: String(definition.version || "1"),
+                    effect: String(definition.effect || "unknown"),
+                    capability: definition.requiredCapability || null,
+                    status: String(step.status || "planned") === "completed" ? "succeeded" : "planned",
+                    idempotencyKey: step.idempotencyKey || null,
+                    input: this.jsonOrNull(step.input),
+                    output: this.jsonOrNull(step.output),
+                  };
+                }),
+            },
+            ...(String(payload.status || "created") === "awaiting_approval"
+              ? {
+                  approvals: {
+                    create: {
+                      id: deterministicOperationId("agent_approval", taskId),
+                      status: "pending",
+                      policy: String(payload.approvalPolicy || payload.approval?.policy || "human"),
+                      requestedBy: String(payload.approval?.requestedBy || "agent"),
+                      metadata: this.jsonOrNull(payload.approval?.metadata || { reason: payload.reason, lane: payload.lane }),
+                    },
+                  },
+                }
+              : {}),
+          },
+          include: agentTaskInclude,
+        });
+      });
+      return this.hydrateAgentTask(task);
+    } catch (error: any) {
+      if (error?.code !== "P2002") throw error;
+      const replay = await prisma.agentTask.findUnique({ where: { operationKey }, include: agentTaskInclude });
+      if (!replay) throw error;
+      this.assertAgentTaskReplay(replay, payload, operationKey);
+      return this.hydrateAgentTask(replay);
+    }
+  }
+
+  async updateAgentTask(id: string, patch: any = {}) {
+    if (this.isLocal) return this.localStore.updateAgentTask(id, patch);
+    const data: any = {};
+    for (const key of ["status", "currentStep", "errorCode", "errorMessage"]) {
+      if (Object.prototype.hasOwnProperty.call(patch, key)) data[key] = patch[key];
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "completedAt")) {
+      data.completedAt = patch.completedAt ? new Date(patch.completedAt) : null;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "payload")) data.payload = this.jsonOrNull(patch.payload);
+    if (Object.prototype.hasOwnProperty.call(patch, "handoff")) data.handoff = this.jsonOrNull(patch.handoff);
+    const task = await (this.prisma as any).agentTask.update({
+      where: { id: String(id || "") },
+      data,
+      include: agentTaskInclude,
+    });
+    return this.hydrateAgentTask(task);
+  }
+
+  async createAgentTaskApproval(taskId: string, payload: any = {}) {
+    if (this.isLocal) return this.localStore.createAgentTaskApproval(taskId, payload);
+    const prisma = this.prisma as any;
+    const approvalKey = normalizeOperationKey(
+      payload.operationKey || `${String(taskId || "")}:${String(payload.toolExecutionId || "tool")}`,
+      "agent task approval operationKey",
+    );
+    const approvalId = String(payload.id || deterministicOperationId("agent_approval", approvalKey));
+    const now = new Date();
+    try {
+      await prisma.$transaction(async (tx: any) => {
+        const task = await tx.agentTask.findUnique({ where: { id: String(taskId || "") } });
+        if (!task) throw new BadRequestException(`agent task not found: ${taskId}`);
+        const existing = await tx.agentTaskApproval.findUnique({ where: { id: approvalId } });
+        if (existing) return;
+        await tx.agentTaskApproval.create({
+          data: {
+            id: approvalId,
+            taskId: task.id,
+            status: "pending",
+            policy: String(payload.policy || "human"),
+            requestedBy: String(payload.requestedBy || "agent"),
+            metadata: this.jsonOrNull(payload.metadata || {}),
+            requestedAt: now,
+          },
+        });
+        await tx.agentTask.update({
+          where: { id: task.id },
+          data: {
+            status: "awaiting_approval",
+            currentStep: String(payload.currentStep || `approval.${String(payload.toolExecutionId || "tool")}`),
+            completedAt: null,
+            errorCode: null,
+            errorMessage: null,
+          },
+        });
+      });
+    } catch (error: any) {
+      if (error?.code !== "P2002") throw error;
+    }
+    return this.getAgentTask(taskId);
+  }
+
+  async decideAgentTaskApproval(taskId: string, approvalId: string, payload: any = {}) {
+    if (this.isLocal) return this.localStore.decideAgentTaskApproval(taskId, approvalId, payload);
+    const decision = String(payload.decision || "").trim().toLowerCase();
+    if (!["approved", "rejected"].includes(decision)) {
+      throw new BadRequestException("agent task approval decision must be approved or rejected");
+    }
+    const prisma = this.prisma as any;
+    const result = await prisma.$transaction(async (tx: any) => {
+      const approval = await tx.agentTaskApproval.findUnique({ where: { id: String(approvalId || "") } });
+      if (!approval || approval.taskId !== String(taskId || "")) {
+        throw new BadRequestException(`agent task approval not found: ${approvalId}`);
+      }
+      if (approval.status !== "pending") {
+        if (approval.status === decision) return { taskId: approval.taskId };
+        throw new ConflictException("agent task approval has already been decided");
+      }
+      const now = new Date();
+      const note = String(payload.note || "").trim() || null;
+      await tx.agentTaskApproval.update({
+        where: { id: approval.id },
+        data: {
+          status: decision,
+          reviewer: String(payload.reviewer || "人工客服"),
+          decisionNote: note,
+          decidedAt: now,
+        },
+      });
+      await tx.agentTaskStep.updateMany({
+        where: { taskId: approval.taskId, mode: "approval", status: "pending" },
+        data: { status: decision, completedAt: now },
+      });
+      await tx.agentTask.update({
+        where: { id: approval.taskId },
+        data: {
+          status: decision === "approved" ? "ready" : "failed",
+          currentStep: decision === "approved" ? "reply.compose" : "approval.rejected",
+          errorMessage: decision === "rejected" ? `审批拒绝${note ? `：${note}` : ""}` : null,
+          ...(decision === "rejected" ? { completedAt: now } : { completedAt: null }),
+        },
+      });
+      return { taskId: approval.taskId };
+    });
+    return this.getAgentTask(result.taskId);
+  }
+
+  async listAgentTaskToolExecutions(filter: IdentityFilter & { taskId?: string; status?: string; limit?: number } = {}) {
+    if (this.isLocal) return this.localStore.listAgentTaskToolExecutions(filter);
+    const rows = await (this.prisma as any).agentTaskToolExecution.findMany({
+      where: {
+        ...(filter.taskId ? { taskId: filter.taskId } : {}),
+        ...(filter.status ? { status: filter.status } : {}),
+        ...((filter.wechatAccountId || filter.conversationId || filter.customerId)
+          ? { task: {
+              ...(filter.wechatAccountId ? { wechatAccountId: filter.wechatAccountId } : {}),
+              ...(filter.conversationId ? { conversationId: filter.conversationId } : {}),
+              ...(filter.customerId ? { customerId: filter.customerId } : {}),
+            } }
+          : {}),
+      },
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+      take: Math.max(1, Math.min(Number(filter.limit || 100), 500)),
+    });
+    return rows;
+  }
+
+  async getAgentTaskToolExecution(id: string) {
+    if (this.isLocal) return this.localStore.getAgentTaskToolExecution(id);
+    return (this.prisma as any).agentTaskToolExecution.findUnique({ where: { id: String(id || "") } });
+  }
+
+  async updateAgentTaskToolExecution(id: string, patch: any = {}) {
+    if (this.isLocal) return this.localStore.updateAgentTaskToolExecution(id, patch);
+    const data: any = {};
+    for (const key of ["status", "errorCode", "errorMessage", "idempotencyKey"]) {
+      if (Object.prototype.hasOwnProperty.call(patch, key)) data[key] = patch[key];
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "input")) data.input = this.jsonOrNull(patch.input);
+    if (Object.prototype.hasOwnProperty.call(patch, "output")) data.output = this.jsonOrNull(patch.output);
+    for (const key of ["startedAt", "completedAt"]) {
+      if (Object.prototype.hasOwnProperty.call(patch, key)) data[key] = patch[key] ? new Date(patch[key]) : null;
+    }
+    return (this.prisma as any).agentTaskToolExecution.update({ where: { id: String(id || "") }, data });
+  }
+
   async getNotification(id: string) {
     if (this.isLocal) return this.localStore.getNotification(id);
     return (this.prisma as any).notification.findUnique({ where: { id } });
@@ -605,7 +957,11 @@ export class WechatPersistence {
   }
 
   async createSendTask(payload: any) {
-    if (this.isLocal) return this.localStore.createSendTask(payload);
+    if (this.isLocal) {
+      const task = this.localStore.createSendTask(payload);
+      await this.syncAgentTaskFromSendTask(task);
+      return task;
+    }
     const prisma = this.prisma as any;
     const operationKey = payload.operationKey ? normalizeOperationKey(payload.operationKey) : null;
     const taskId = operationKey ? deterministicOperationId("send", operationKey) : payload.id;
@@ -613,7 +969,9 @@ export class WechatPersistence {
       const existing = await prisma.wechatSendTask.findUnique({ where: { id: taskId }, include: taskInclude });
       if (existing) {
         this.assertSendTaskReplay(existing, payload, operationKey);
-        return (await this.attachQuotes([existing]))[0];
+        const hydrated = (await this.attachQuotes([existing]))[0];
+        await this.syncAgentTaskFromSendTask(hydrated);
+        return hydrated;
       }
     }
     const conversation = operationKey
@@ -665,13 +1023,17 @@ export class WechatPersistence {
         },
         include: taskInclude,
       });
-      return (await this.attachQuotes([task]))[0];
+      const hydrated = (await this.attachQuotes([task]))[0];
+      await this.syncAgentTaskFromSendTask(hydrated);
+      return hydrated;
     } catch (error) {
       if (operationKey && taskId && isUniqueConstraintError(error)) {
         const winner = await prisma.wechatSendTask.findUnique({ where: { id: taskId }, include: taskInclude });
         if (winner) {
           this.assertSendTaskReplay(winner, payload, operationKey);
-          return (await this.attachQuotes([winner]))[0];
+          const hydrated = (await this.attachQuotes([winner]))[0];
+          await this.syncAgentTaskFromSendTask(hydrated);
+          return hydrated;
         }
       }
       throw error;
@@ -679,14 +1041,20 @@ export class WechatPersistence {
   }
 
   async updateSendTask(id: string, patch: any) {
-    if (this.isLocal) return this.localStore.updateSendTask(id, patch);
+    if (this.isLocal) {
+      const task = this.localStore.updateSendTask(id, patch);
+      await this.syncAgentTaskFromSendTask(task);
+      return task;
+    }
     const data = this.sendTaskPatch(patch);
     const task = await (this.prisma as any).wechatSendTask.update({
       where: { id },
       data,
       include: taskInclude,
     });
-    return (await this.attachQuotes([task]))[0];
+    const hydrated = (await this.attachQuotes([task]))[0];
+    await this.syncAgentTaskFromSendTask(hydrated);
+    return hydrated;
   }
 
   async listSendAttempts(filter: { sendTaskId?: string; limit?: number } & IdentityFilter = {}) {
@@ -780,7 +1148,9 @@ export class WechatPersistence {
     } | null;
   }) {
     if (this.isLocal) {
-      return this.localStore.completeSendAttemptAndTask(params);
+      const result = this.localStore.completeSendAttemptAndTask(params);
+      if (result?.task) await this.syncAgentTaskFromSendTask(result.task);
+      return result;
     }
     const prisma = this.prisma as any;
     const completed = await prisma.$transaction(async (tx: any) => {
@@ -833,13 +1203,16 @@ export class WechatPersistence {
       return true;
     });
     if (!completed) return null;
-    return {
-      task: await this.getSendTask(params.taskId),
+    const completedTask = await this.getSendTask(params.taskId);
+    const result = {
+      task: completedTask,
       attempt: await (this.prisma as any).wechatSendAttempt.findUnique({
         where: { id: params.attemptId },
         include: attemptInclude,
       }),
     };
+    if (result.task) await this.syncAgentTaskFromSendTask(result.task);
+    return result;
   }
 
   async updateSendTaskWithLinkedTransition(params: {
@@ -853,7 +1226,11 @@ export class WechatPersistence {
       required?: boolean;
     } | null;
   }) {
-    if (this.isLocal) return this.localStore.updateSendTask(params.taskId, params.taskPatch);
+    if (this.isLocal) {
+      const task = this.localStore.updateSendTask(params.taskId, params.taskPatch);
+      await this.syncAgentTaskFromSendTask(task);
+      return task;
+    }
     const prisma = this.prisma as any;
     const completed = await prisma.$transaction(async (tx: any) => {
       const task = await tx.wechatSendTask.updateMany({
@@ -874,19 +1251,80 @@ export class WechatPersistence {
       return true;
     });
     if (!completed) return null;
-    return this.getSendTask(params.taskId);
+    const task = await this.getSendTask(params.taskId);
+    if (task) await this.syncAgentTaskFromSendTask(task);
+    return task;
   }
 
   async claimQueuedTaskAndCreateAttempt(params: {
     taskId: string;
     taskPatch: any;
     attempt: any;
+    claimGuard?: {
+      requireAccountQueueHead?: boolean;
+      wechatAccountId?: string;
+      conversationId?: string;
+      customerId?: string;
+      latestInboundMessageId?: string;
+    };
   }) {
     if (this.isLocal) {
-      return this.localStore.claimQueuedSendTaskAndCreateAttempt(params);
+      const result = this.localStore.claimQueuedSendTaskAndCreateAttempt(params);
+      if (result?.task) await this.syncAgentTaskFromSendTask(result.task);
+      return result;
     }
     const prisma = this.prisma as any;
-    const result = await prisma.$transaction(async (tx: any) => {
+    const claimResult = await prisma.$transaction(async (tx: any) => {
+      const currentTask = await tx.wechatSendTask.findUnique({ where: { id: params.taskId } });
+      if (!currentTask || currentTask.status !== "queued") return null;
+      const guard = params.claimGuard || {};
+      if (
+        (guard.wechatAccountId && currentTask.wechatAccountId !== guard.wechatAccountId)
+        || (guard.conversationId && currentTask.conversationId !== guard.conversationId)
+      ) return null;
+      const lockTime = new Date();
+      if (guard.requireAccountQueueHead) {
+        const accountLock = await tx.wechatAccount.updateMany({
+          where: { id: currentTask.wechatAccountId },
+          data: { updatedAt: lockTime },
+        });
+        if (accountLock.count !== 1) return null;
+      }
+      const conversationLock = await tx.conversation.updateMany({
+        where: { id: currentTask.conversationId, wechatAccountId: currentTask.wechatAccountId },
+        data: { updatedAt: lockTime },
+      });
+      if (conversationLock.count !== 1) return null;
+      const conversation = await tx.conversation.findUnique({
+        where: { id: currentTask.conversationId },
+        select: { customerId: true },
+      });
+      if (!conversation || (guard.customerId && String(conversation.customerId || "") !== guard.customerId)) return null;
+      if (guard.requireAccountQueueHead) {
+        const anotherSendingTask = await tx.wechatSendTask.findFirst({
+          where: {
+            id: { not: currentTask.id },
+            wechatAccountId: currentTask.wechatAccountId,
+            status: "sending",
+          },
+          select: { id: true },
+        });
+        if (anotherSendingTask) return null;
+        const queueHead = await tx.wechatSendTask.findFirst({
+          where: { wechatAccountId: currentTask.wechatAccountId, status: "queued" },
+          orderBy: [{ queuedAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+          select: { id: true },
+        });
+        if (!queueHead || queueHead.id !== currentTask.id) return null;
+      }
+      if (guard.latestInboundMessageId) {
+        const latestInbound = await tx.message.findFirst({
+          where: { conversationId: currentTask.conversationId, direction: "inbound" },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          select: { id: true },
+        });
+        if (!latestInbound || latestInbound.id !== guard.latestInboundMessageId) return null;
+      }
       const claimed = await tx.wechatSendTask.updateMany({
         where: { id: params.taskId, status: "queued" },
         data: this.sendTaskPatch(params.taskPatch),
@@ -907,14 +1345,17 @@ export class WechatPersistence {
       });
       return { attemptId: attempt.id };
     });
-    if (!result) return null;
-    return {
-      task: await this.getSendTask(params.taskId),
+    if (!claimResult) return null;
+    const resultTask = await this.getSendTask(params.taskId);
+    const result = {
+      task: resultTask,
       attempt: await (this.prisma as any).wechatSendAttempt.findUnique({
-        where: { id: result.attemptId },
+        where: { id: claimResult.attemptId },
         include: attemptInclude,
       }),
     };
+    if (result.task) await this.syncAgentTaskFromSendTask(result.task);
+    return result;
   }
 
   async cancelTaskAndAttempt(params: {
@@ -931,6 +1372,7 @@ export class WechatPersistence {
         ? this.localStore.updateSendAttempt(params.attemptId, params.attemptPatch)
         : null;
       const task = this.localStore.updateSendTask(params.taskId, params.taskPatch);
+      await this.syncAgentTaskFromSendTask(task);
       return { task, attempt };
     }
     const prisma = this.prisma as any;
@@ -954,12 +1396,15 @@ export class WechatPersistence {
       return true;
     });
     if (!completed) return null;
-    return {
-      task: await this.getSendTask(params.taskId),
+    const resultTask = await this.getSendTask(params.taskId);
+    const result = {
+      task: resultTask,
       attempt: params.attemptId
         ? await prisma.wechatSendAttempt.findUnique({ where: { id: params.attemptId }, include: attemptInclude })
         : null,
     };
+    if (result.task) await this.syncAgentTaskFromSendTask(result.task);
+    return result;
   }
 
   async listAccountQueueTaskIds(wechatAccountId: string) {
@@ -1350,6 +1795,347 @@ export class WechatPersistence {
     };
   }
 
+  async getWechatWorkCustomerUpgrade(id: string) {
+    if (this.isLocal) return this.localStore.getWechatWorkCustomerUpgrade(id);
+    return (this.prisma as any).wechatWorkCustomerUpgrade.findUnique({ where: { id } });
+  }
+
+  async findWechatWorkCustomerUpgradeByState(state: string) {
+    if (this.isLocal) return this.localStore.findWechatWorkCustomerUpgradeByState(state);
+    return (this.prisma as any).wechatWorkCustomerUpgrade.findUnique({ where: { state } });
+  }
+
+  async findWechatWorkCustomerUpgradeByMsgId(msgid: string) {
+    if (this.isLocal) return this.localStore.findWechatWorkCustomerUpgradeByMsgId(msgid);
+    return (this.prisma as any).wechatWorkCustomerUpgrade.findFirst({
+      where: { OR: [{ textMsgId: msgid }, { imageMsgId: msgid }] },
+    });
+  }
+
+  async findPendingWechatWorkCustomerUpgrade(openKfid: string, externalUserId: string) {
+    if (this.isLocal) return this.localStore.findPendingWechatWorkCustomerUpgrade(openKfid, externalUserId);
+    return (this.prisma as any).wechatWorkCustomerUpgrade.findFirst({
+      where: {
+        openKfid,
+        externalUserId,
+        status: { in: ["partial", "failed", "async_failed"] },
+        NOT: { imageStatus: "api_accepted" },
+      },
+      orderBy: { updatedAt: "desc" },
+    });
+  }
+
+  async claimWechatWorkCustomerUpgrade(payload: Record<string, any>) {
+    if (this.isLocal) return this.localStore.claimWechatWorkCustomerUpgrade(payload);
+    const prisma = this.prisma as any;
+    const recordId = String(payload.id || "").trim();
+    const claimToken = String(payload.claimToken || "").trim();
+    if (!recordId || !claimToken) throw new BadRequestException("customer upgrade claim requires id and claimToken");
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const result = await prisma.$transaction(async (tx: any) => {
+          const now = new Date();
+          const bindingLock = await tx.wechatWorkBinding.updateMany({
+            where: {
+              openKfid: String(payload.openKfid),
+              externalUserId: String(payload.externalUserId),
+            },
+            data: { updatedAt: now },
+          });
+          if (bindingLock.count !== 1) {
+            throw new BadRequestException("customer upgrade binding changed before specialist selection");
+          }
+          const binding = await tx.wechatWorkBinding.findUnique({
+            where: {
+              openKfid_externalUserId: {
+                openKfid: String(payload.openKfid),
+                externalUserId: String(payload.externalUserId),
+              },
+            },
+          });
+          if (
+            !binding
+            || String(binding.wechatAccountId || "") !== String(payload.wechatAccountId || "")
+            || String(binding.conversationId || "") !== String(payload.conversationId || "")
+            || String(binding.customerId || "") !== String(payload.customerId || "")
+          ) {
+            throw new BadRequestException("customer upgrade identity changed before specialist selection");
+          }
+
+          const current = await tx.wechatWorkCustomerUpgrade.findUnique({ where: { id: recordId } });
+          if (current && ["ready", "queued", "sending", "partial", "api_accepted", "async_failed", "half_added_pending", "identity_unverified", "added_confirmed"].includes(String(current.status || ""))) {
+            await this.supersedeOtherWechatWorkCustomerUpgrades(tx, payload, recordId);
+            return { mode: "resume", record: current };
+          }
+          if (
+            current?.status === "creating"
+            && String(current.claimToken || "") !== claimToken
+            && Number(new Date(current.claimExpiresAt || 0)) > now.getTime()
+          ) {
+            return { mode: "in_progress", record: current };
+          }
+          const data = {
+            corpId: String(payload.corpId),
+            openKfid: String(payload.openKfid),
+            externalUserId: String(payload.externalUserId),
+            wechatAccountId: String(payload.wechatAccountId),
+            conversationId: String(payload.conversationId),
+            customerId: String(payload.customerId),
+            memberUserId: String(payload.memberUserId),
+            state: String(payload.state),
+            sourceUnionId: String(payload.sourceUnionId || "").trim() || null,
+            status: "creating",
+            claimToken,
+            claimExpiresAt: new Date(now.getTime() + 2 * 60 * 1000),
+            version: Math.max(0, Number(current?.version || 0)) + 1,
+          };
+          if (!current) {
+            const record = await tx.wechatWorkCustomerUpgrade.create({ data: { id: recordId, ...data } });
+            await this.supersedeOtherWechatWorkCustomerUpgrades(tx, payload, recordId);
+            return { mode: "claimed", record };
+          }
+          const claimed = await tx.wechatWorkCustomerUpgrade.updateMany({
+            where: { id: recordId, version: current.version },
+            data,
+          });
+          if (claimed.count !== 1) return null;
+          await this.supersedeOtherWechatWorkCustomerUpgrades(tx, payload, recordId);
+          return {
+            mode: "claimed",
+            record: await tx.wechatWorkCustomerUpgrade.findUnique({ where: { id: recordId } }),
+          };
+        });
+        if (result) return result;
+      } catch (error) {
+        if (!isUniqueConstraintError(error)) throw error;
+      }
+    }
+    const winner = await prisma.wechatWorkCustomerUpgrade.findUnique({ where: { id: recordId } });
+    return { mode: "in_progress", record: winner };
+  }
+
+  private async supersedeOtherWechatWorkCustomerUpgrades(prisma: any, payload: Record<string, any>, recordId: string) {
+    await prisma.wechatWorkCustomerUpgrade.updateMany({
+      where: {
+        id: { not: recordId },
+        openKfid: String(payload.openKfid || ""),
+        externalUserId: String(payload.externalUserId || ""),
+        status: { in: ["creating", "ready", "queued", "sending", "partial", "failed", "async_failed", "api_accepted", "half_added_pending"] },
+      },
+      data: {
+        status: "superseded",
+        errorMessage: "客户已选择新的长期服务专员，此二维码不再自动恢复。",
+        claimToken: null,
+        claimExpiresAt: null,
+        version: { increment: 1 },
+      },
+    });
+  }
+
+  async updateWechatWorkCustomerUpgrade(
+    id: string,
+    patch: Record<string, any>,
+    expected: { claimToken?: string; version?: number } = {},
+  ) {
+    if (this.isLocal) return this.localStore.updateWechatWorkCustomerUpgrade(id, patch, expected);
+    const prisma = this.prisma as any;
+    const dateFields = new Set([
+      "claimExpiresAt", "apiAcceptedAt", "asyncFailedAt", "halfAddedAt", "identityVerifiedAt", "addedAt",
+    ]);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const current = await prisma.wechatWorkCustomerUpgrade.findUnique({ where: { id } });
+      if (!current) return null;
+      if (expected.claimToken && current.claimToken !== expected.claimToken) return null;
+      if (expected.version != null && Number(current.version || 0) !== Number(expected.version)) return null;
+      const data = Object.fromEntries(Object.entries(patch).map(([key, value]) => [
+        key,
+        dateFields.has(key) && value ? new Date(String(value)) : value,
+      ]));
+      if (current.status === "added_confirmed" && data.status !== "added_confirmed") data.status = "added_confirmed";
+      const updated = await prisma.wechatWorkCustomerUpgrade.updateMany({
+        where: {
+          id,
+          version: current.version,
+          ...(expected.claimToken ? { claimToken: expected.claimToken } : {}),
+        },
+        data: { ...data, version: current.version + 1 },
+      });
+      if (updated.count === 1) return prisma.wechatWorkCustomerUpgrade.findUnique({ where: { id } });
+      if (expected.version != null) return null;
+    }
+    return null;
+  }
+
+  async createWechatWorkEventSendTaskFromCredential(params: {
+    credentialId: string;
+    operationKey: string;
+    identity: { wechatAccountId: string; conversationId: string; customerId: string };
+    binding: { openKfid: string; externalUserId: string };
+    payload: Record<string, unknown>;
+    guardSnapshot: Record<string, unknown>;
+  }) {
+    if (this.isLocal) return this.localStore.createWechatWorkEventSendTaskFromCredential(params);
+    const prisma = this.prisma as any;
+    const recordId = String(params.credentialId || "").trim();
+    const operationKey = normalizeOperationKey(params.operationKey, "operationKey");
+    const taskId = deterministicOperationId("send", operationKey);
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const result = await prisma.$transaction(async (tx: any) => {
+      const existingTask = await tx.wechatSendTask.findUnique({ where: { id: taskId }, include: taskInclude });
+      if (existingTask) {
+        throw new BadRequestException("企业微信事件响应发送任务已存在，不能重复创建");
+      }
+      const record = await tx.wechatWorkAuditLog.findUnique({ where: { id: recordId } });
+      if (!record) return null;
+      const credential = {
+        ...(record.metadata && typeof record.metadata === "object" ? record.metadata : {}),
+        ...record,
+      };
+      if (credential.action !== "event_reply_credential") {
+        throw new BadRequestException("企业微信事件响应凭证不存在或已不可用");
+      }
+      if (
+        credential.wechatAccountId !== params.identity.wechatAccountId ||
+        credential.conversationId !== params.identity.conversationId ||
+        credential.customerId !== params.identity.customerId ||
+        credential.openKfid !== params.binding.openKfid ||
+        credential.externalUserId !== params.binding.externalUserId
+      ) {
+        throw new BadRequestException("企业微信事件响应凭证与当前客户身份不一致");
+      }
+      if (credential.status !== "pending") return null;
+      const originalSecret = credential.eventCodeSecret;
+      if (!originalSecret || !credential.eventCodeHash) {
+        throw new BadRequestException("企业微信事件响应凭证缺少加密体");
+      }
+      const expiresAt = Date.parse(String(credential.expiresAt || ""));
+      if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+        const expiredMetadata = {
+          ...(record.metadata && typeof record.metadata === "object" ? record.metadata : {}),
+          expiredAt: nowIso,
+          eventCredentialSecretClearedAt: nowIso,
+          eventCredentialSecretStored: false,
+        };
+        delete expiredMetadata.eventCodeSecret;
+        await tx.wechatWorkAuditLog.updateMany({
+          where: { id: recordId, action: "event_reply_credential", status: "pending" },
+          data: { status: "expired", metadata: this.jsonOrNull(expiredMetadata) },
+        });
+        return { expired: true };
+      }
+      const conversation = await tx.conversation.findUnique({ where: { id: params.identity.conversationId } });
+      if (!conversation) {
+        throw new BadRequestException(`conversation not found: ${params.identity.conversationId}`);
+      }
+      if (conversation.wechatAccountId !== params.identity.wechatAccountId) {
+        throw new BadRequestException("send task conversation binding invalid: wechat account does not match conversation");
+      }
+      if (conversation.customerId !== params.identity.customerId) {
+        throw new BadRequestException("send task customer binding invalid: customer does not match conversation");
+      }
+      const taskPayload = {
+        ...params.payload,
+        eventCredentialId: credential.id,
+        eventCodeHash: credential.eventCodeHash,
+        eventCodeSecret: originalSecret,
+        eventCredentialExpiresAt: credential.expiresAt,
+      };
+      const eventGuardSnapshot = {
+        ...params.guardSnapshot,
+        eventCredentialId: credential.id,
+        eventCodeHash: credential.eventCodeHash,
+        eventCredentialExpiresAt: credential.expiresAt,
+      };
+      const requestOperation = requestOperationMetadata(
+        operationKey,
+        createSendTaskOperationFingerprint({
+          operationKey,
+          wechatAccountId: params.identity.wechatAccountId,
+          conversationId: params.identity.conversationId,
+          customerId: params.identity.customerId,
+          payload: taskPayload,
+          guardSnapshot: eventGuardSnapshot,
+        }, {
+          conversationId: params.identity.conversationId,
+          customerId: params.identity.customerId,
+          wechatAccountId: params.identity.wechatAccountId,
+        }),
+      );
+      const consumedMetadata = {
+        ...(record.metadata && typeof record.metadata === "object" ? record.metadata : {}),
+        consumedAt: nowIso,
+        consumedOperationKey: operationKey,
+        eventCredentialSecretClearedAt: nowIso,
+        eventCredentialSecretStored: false,
+      };
+      delete consumedMetadata.eventCodeSecret;
+      const claimed = await tx.wechatWorkAuditLog.updateMany({
+        where: {
+          id: recordId,
+          action: "event_reply_credential",
+          status: "pending",
+          wechatAccountId: params.identity.wechatAccountId,
+          conversationId: params.identity.conversationId,
+          customerId: params.identity.customerId,
+          openKfid: params.binding.openKfid,
+          externalUserId: params.binding.externalUserId,
+        },
+        data: {
+          status: "consumed",
+          sendTaskId: taskId,
+          metadata: this.jsonOrNull(consumedMetadata),
+        },
+      });
+      if (claimed.count !== 1) return null;
+      const task = await tx.wechatSendTask.create({
+        data: {
+          id: taskId,
+          status: "queued",
+          wechatAccountId: params.identity.wechatAccountId,
+          conversationId: params.identity.conversationId,
+          designJobId: null,
+          quoteDraftId: null,
+          payload: taskPayload,
+          guardSnapshot: {
+            ...(eventGuardSnapshot || { status: "pending", checks: [] }),
+            binding: {
+              conversationId: params.identity.conversationId,
+              customerId: params.identity.customerId,
+              wechatAccountId: params.identity.wechatAccountId,
+            },
+            requestOperation,
+          },
+          errorMessage: null,
+          queuedAt: now,
+          sentAt: null,
+        },
+        include: taskInclude,
+      });
+      return {
+        credential: {
+          ...credential,
+          status: "consumed",
+          sendTaskId: taskId,
+          consumedAt: nowIso,
+          consumedOperationKey: operationKey,
+          eventCredentialSecretClearedAt: nowIso,
+          eventCredentialSecretStored: false,
+          eventCodeSecret: originalSecret,
+        },
+        task,
+      };
+    });
+    if (result?.expired) {
+      throw new BadRequestException("企业微信事件响应凭证已过期，请等待客户新事件后再发送");
+    }
+    if (!result) return null;
+    return {
+      credential: result.credential,
+      task: (await this.attachQuotes([result.task]))[0],
+    };
+  }
+
   async hasWechatWorkAuditMsgId(msgid: string) {
     if (this.isLocal) return this.localStore.hasWechatWorkAuditMsgId(msgid);
     return Boolean(await (this.prisma as any).wechatWorkAuditLog.findFirst({
@@ -1358,7 +2144,6 @@ export class WechatPersistence {
         OR: [
           { action: "inbound_processed", status: "processed" },
           { action: "inbound_ignored", status: "ignored" },
-          { action: "inbound_duplicate", status: "duplicate" },
           { action: "event_processed", status: "processed" },
           { action: "send_async_failed", status: "processed" },
           { action: "inbound_failed", status: "permanent_manual_review" },
@@ -1570,6 +2355,23 @@ export class WechatPersistence {
     );
   }
 
+  private assertAgentTaskReplay(existing: any, payload: any, operationKey: string) {
+    if (String(existing.operationKey || "") !== operationKey) {
+      throw new BadRequestException(`agent task replay changed operationKey: ${operationKey}`);
+    }
+    const requestedIdentity = payload.identity || payload;
+    const storedIdentity = {
+      wechatAccountId: existing.wechatAccountId,
+      conversationId: existing.conversationId,
+      customerId: existing.customerId,
+    };
+    assertStoredOperationIdentityReplay(storedIdentity, requestedIdentity, "agent task create");
+    const expectedObjective = String(payload.objective || "");
+    if (expectedObjective && String(existing.objective || "") && expectedObjective !== String(existing.objective)) {
+      throw new BadRequestException(`agent task replay changed objective: ${operationKey}`);
+    }
+  }
+
   private normalizeSnapshot(snapshot: any) {
     return {
       ...snapshot,
@@ -1578,6 +2380,39 @@ export class WechatPersistence {
           ? snapshot.confidence.toNumber()
           : snapshot?.confidence,
     };
+  }
+
+  private hydrateAgentTask(task: any) {
+    return {
+      ...task,
+      steps: Array.isArray(task?.steps) ? task.steps : [],
+      approvals: Array.isArray(task?.approvals) ? task.approvals : [],
+      toolExecutions: Array.isArray(task?.toolExecutions) ? task.toolExecutions : [],
+    };
+  }
+
+  private async syncAgentTaskFromSendTask(task: any) {
+    const agentTaskId = String(task?.payload?.agentTaskId || "").trim();
+    if (!agentTaskId) return task;
+    if (!(await this.getAgentTask(agentTaskId))) return task;
+    const sendStatus = String(task?.status || "");
+    const status = sendStatus === "sent"
+      ? "succeeded"
+      : ["uncertain", "unknown_outcome"].includes(sendStatus)
+        ? "unknown_outcome"
+        : ["failed", "blocked", "cancelled", "dry_run"].includes(sendStatus)
+          ? "failed"
+          : ["queued", "sending", "pending_ack"].includes(sendStatus)
+            ? "executing"
+            : null;
+    if (!status) return task;
+    await this.updateAgentTask(agentTaskId, {
+      status,
+      currentStep: status === "succeeded" ? "reply.sent" : status === "failed" ? "reply.failed" : "reply.send",
+      ...(status === "failed" ? { errorMessage: String(task?.errorMessage || "") || null } : {}),
+      ...(status === "unknown_outcome" ? { errorMessage: String(task?.errorMessage || "发送结果未知") } : {}),
+    });
+    return task;
   }
 
   private hydrateTask(task: any, quoteDraft: any = null) {
@@ -1673,9 +2508,7 @@ export class WechatPersistence {
   }
 
   private timelineAttachments(value: unknown, status: string) {
-    return (Array.isArray(value) ? value : []).map((item: any) =>
-      item && typeof item === "object" ? { ...item, status: item.status || status } : { value: item, status },
-    );
+    return normalizeConversationTimelineAttachments(value, status);
   }
 
   private timelineTaskAttachments(task: any, designAssets: any[]) {

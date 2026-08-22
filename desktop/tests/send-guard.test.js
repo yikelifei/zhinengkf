@@ -134,7 +134,7 @@ test("blocks send guard when task is not first in account queue", () => {
   assert.equal(result.failedKeys.includes("singleAccountQueueHead"), true);
 });
 
-test("blocks send guard when conversation is manually locked", () => {
+test("does not block send guard when conversation has an old manual lock", () => {
   const result = validateSendGuard({
     task,
     account,
@@ -150,10 +150,9 @@ test("blocks send guard when conversation is manually locked", () => {
     accountQueueTaskIds: ["send-1"],
   });
 
-  assert.equal(result.ok, false);
-  assert.equal(result.failedKeys.includes("conversationManualUnlocked"), true);
-  assert.equal(result.failedKeys.includes("conversationManualLocked"), true);
-  assert.match(result.reason, /人工接管/);
+  assert.equal(result.ok, true);
+  assert.equal(result.failedKeys.includes("conversationManualUnlocked"), false);
+  assert.equal(result.failedKeys.includes("conversationManualLocked"), false);
 });
 
 test("passes send guard when current window snapshot is fresh", () => {
@@ -230,7 +229,7 @@ test("explains send queue skips with actionable advice", () => {
   assert.match(manualLocked.recommendedAction, /解除接管/);
 });
 
-test("rejects requeue while conversation is manually locked", () => {
+test("allows requeue while conversation has an old manual lock", () => {
   const result = evaluateSendTaskRequeue({
     task: {
       ...task,
@@ -239,10 +238,8 @@ test("rejects requeue while conversation is manually locked", () => {
     },
   });
 
-  assert.equal(result.ok, false);
-  assert.equal(result.reason, "conversation_manual_locked");
-  assert.equal(result.failedKeys.includes("conversationManualUnlocked"), true);
-  assert.equal(result.failedKeys.includes("conversationManualLocked"), true);
+  assert.equal(result.ok, true);
+  assert.equal(result.action, "requeue");
 });
 
 test("rejects requeue while bridge ack is pending", () => {
@@ -338,7 +335,7 @@ test("rejects requeue after audited manual cancellation", () => {
   assert.deepEqual(result.failedKeys, ["taskNotAuditedCancelled"]);
 });
 
-test("rejects requeue after routing policy moves task to manual handling", () => {
+test("allows requeue after routing policy moved task to manual handling when business risk is disabled", () => {
   const result = evaluateSendTaskRequeue({
     task: {
       ...task,
@@ -351,10 +348,8 @@ test("rejects requeue after routing policy moves task to manual handling", () =>
     },
   });
 
-  assert.equal(result.ok, false);
-  assert.equal(result.reason, "routing_policy_manual_required");
-  assert.deepEqual(result.failedKeys, ["routingPolicyManualRequired"]);
-  assert.match(result.message, /路由策略/);
+  assert.equal(result.ok, true);
+  assert.equal(result.action, "requeue");
 });
 
 test("allows requeue after dry run audit", () => {
@@ -433,15 +428,15 @@ test("blocks send task binding when payload identity points elsewhere", () => {
   assert.equal(result.failedKeys.includes("payloadQuoteDraftMatchesTask"), true);
 });
 
-test("blocks send task binding when conversation is manually locked", () => {
+test("does not block send task binding when conversation has an old manual lock", () => {
   const result = validateSendTaskBinding({
     task: { id: "send-1", wechatAccountId: "wechat-1", conversationId: "conv-1" },
     conversation: { ...boundConversation, manualLocked: true },
   });
 
-  assert.equal(result.ok, false);
-  assert.equal(result.failedKeys.includes("conversationManualUnlocked"), true);
-  assert.equal(result.failedKeys.includes("conversationManualLocked"), true);
+  assert.equal(result.ok, true);
+  assert.equal(result.failedKeys.includes("conversationManualUnlocked"), false);
+  assert.equal(result.failedKeys.includes("conversationManualLocked"), false);
 });
 
 test("blocks send task binding when design job belongs to another conversation", () => {

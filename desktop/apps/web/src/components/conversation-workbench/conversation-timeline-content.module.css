@@ -1,0 +1,299 @@
+.messageSender {
+  color: #8c939d;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+:global([class*="outboundMessage"]) .messageSender {
+  text-align: right;
+}
+
+.messageContentStack {
+  display: grid;
+  min-width: 0;
+  justify-items: start;
+  gap: 6px;
+}
+
+:global([class*="outboundMessage"]) .messageContentStack {
+  justify-items: end;
+}
+
+.imageAttachment {
+  display: block;
+  overflow: hidden;
+  max-width: min(300px, 100%);
+  border: 1px solid rgb(31 35 41 / 8%);
+  border-radius: 5px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(31 35 41 / 5%);
+}
+
+.imageAttachment img {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+}
+
+.fileAttachment,
+.unavailableAttachment,
+.voiceAttachment,
+.locationCard,
+.contactCard {
+  display: grid;
+  width: min(290px, 100%);
+  min-width: 230px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #e1e3e6;
+  border-radius: 5px;
+  padding: 11px 12px;
+  color: #252a31;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(31 35 41 / 4%);
+  text-decoration: none;
+}
+
+.fileAttachment:hover,
+.locationCard:hover {
+  border-color: #ccd2d9;
+  background: #fbfbfc;
+}
+
+.fileAttachmentUnavailable {
+  cursor: default;
+}
+
+.fileAttachmentIcon,
+.structuredIcon,
+.contactAvatar,
+.productPlaceholder {
+  display: inline-flex;
+  width: 40px;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: #fff;
+  background: #5b91e8;
+}
+
+.fileAttachmentIcon {
+  background: #e96954;
+}
+
+.fileAttachmentCopy,
+.locationCard > span:nth-child(2),
+.contactCard > span:nth-child(2),
+.cardCopy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.fileAttachmentCopy b,
+.locationCard b,
+.contactCard b,
+.cardCopy b {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fileAttachmentCopy small,
+.locationCard small,
+.contactCard small,
+.cardCopy small {
+  overflow: hidden;
+  color: #8a919b;
+  font-size: 10px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+}
+
+.voiceAttachment {
+  grid-template-columns: auto minmax(0, 1fr);
+  min-width: 250px;
+  padding: 8px 12px;
+}
+
+.voiceAttachment > svg {
+  color: #238636;
+}
+
+.voiceAttachment audio {
+  width: 100%;
+  height: 34px;
+}
+
+.voiceAttachment > span,
+.unavailableAttachment > span {
+  color: #7d858f;
+  font-size: 11px;
+}
+
+.videoAttachment {
+  display: block;
+  width: min(360px, 100%);
+  max-height: 300px;
+  border-radius: 5px;
+  background: #111;
+}
+
+.unavailableAttachment {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.linkCard,
+.productCard {
+  display: grid;
+  width: min(300px, 100%);
+  min-width: 240px;
+  grid-template-columns: minmax(0, 1fr) 54px;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #e1e3e6;
+  border-radius: 5px;
+  padding: 11px;
+  color: #252a31;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(31 35 41 / 4%);
+  text-decoration: none;
+}
+
+.linkCard > img,
+.productCard > img,
+.productPlaceholder {
+  width: 54px;
+  height: 54px;
+  border-radius: 4px;
+  object-fit: cover;
+}
+
+.linkCard > .structuredIcon {
+  width: 54px;
+  height: 54px;
+  color: #6b7480;
+  background: #f0f2f5;
+}
+
+.productCard {
+  grid-template-columns: 64px minmax(0, 1fr);
+}
+
+.productCard > img,
+.productCard .productPlaceholder {
+  width: 64px;
+  height: 64px;
+}
+
+.productPlaceholder {
+  color: #e28a24;
+  background: #fff2df;
+}
+
+.cardCopy em {
+  color: #e24d36;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 650;
+}
+
+.contactAvatar {
+  border-radius: 50%;
+  background: #4fa66a;
+}
+
+.miniProgramCard {
+  display: grid;
+  width: min(280px, 100%);
+  min-width: 230px;
+  gap: 8px;
+  border: 1px solid #e1e3e6;
+  border-radius: 5px;
+  padding: 12px;
+  color: #252a31;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(31 35 41 / 4%);
+}
+
+.miniProgramCard > small {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #8a919b;
+  font-size: 9px;
+}
+
+.miniProgramCard > b {
+  min-height: 50px;
+  padding: 6px 2px;
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.miniProgramCard > span {
+  border-top: 1px solid #eef0f2;
+  padding-top: 8px;
+  color: #9aa0a8;
+  font-size: 9px;
+}
+
+.menuCard {
+  display: grid;
+  width: min(300px, 100%);
+  min-width: 240px;
+  gap: 8px;
+  border: 1px solid #e1e3e6;
+  border-radius: 5px;
+  padding: 10px 12px;
+  color: #252a31;
+  background: #fff;
+}
+
+.menuCard p {
+  margin: 0;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.menuCard > div {
+  display: grid;
+  border-top: 1px solid #eef0f2;
+}
+
+.menuCard > div > :is(a, span) {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #eef0f2;
+  color: #3478d4;
+  font-size: 11px;
+  text-decoration: none;
+}
+
+.menuCard > small {
+  color: #9299a2;
+  font-size: 9px;
+}
+
+@media (max-width: 420px) {
+  .fileAttachment,
+  .unavailableAttachment,
+  .voiceAttachment,
+  .locationCard,
+  .contactCard,
+  .linkCard,
+  .productCard,
+  .miniProgramCard,
+  .menuCard {
+    width: 100%;
+    min-width: 0;
+  }
+}

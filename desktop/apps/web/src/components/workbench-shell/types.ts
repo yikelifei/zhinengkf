@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 export type WorkspaceSectionId =
   | "overview-center"
   | "conversation-center"
+  // Legacy hash compatibility only. Active Enterprise WeChat pages use conversation-center.
   | "wecom-workspace"
   | "routing-center"
   | "send-center"

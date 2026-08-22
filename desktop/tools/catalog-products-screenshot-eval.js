@@ -14,6 +14,11 @@
   const categorySections = Array.from(document.querySelectorAll('[aria-label^="\u5206\u7c7b "]'));
   if (!categorySections.length) throw new Error("catalog products did not render category sections");
 
+  const categoryQuickNav = document.querySelector('[aria-label="\u6309\u5206\u7c7b\u5feb\u901f\u5b9a\u4f4d"]');
+  if (!categoryQuickNav) throw new Error("catalog products did not render category quick navigation");
+  const categoryQuickButtons = Array.from(categoryQuickNav.querySelectorAll('[data-action-id^="catalog-category-jump-"]'));
+  if (categoryQuickButtons.length < 2) throw new Error(`catalog category quick navigation was too sparse: ${categoryQuickButtons.length}`);
+
   const productTiles = Array.from(document.querySelectorAll('[data-action-id^="catalog-products-open-"]'));
   if (!productTiles.length) throw new Error("catalog products did not render product tiles");
 
@@ -42,6 +47,7 @@
 
   window.__catalogProductsScreenshotEval = {
     categories: categorySections.length,
+    categoryQuickButtons: categoryQuickButtons.length,
     productTiles: productTiles.length,
     imageStates,
     statusLabels,

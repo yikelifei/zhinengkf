@@ -70,10 +70,9 @@ export type ConversationWorkbenchParticipant = {
 };
 
 export type ConversationWorkbenchAttachment = {
-  id: string;
-  name: string;
-  kind: "image" | "file";
-  detail?: string;
+  id: string; name: string;
+  kind: "image" | "voice" | "video" | "file";
+  detail?: string; sizeLabel?: string;
   href?: string;
   previewUrl?: string;
 };
@@ -84,6 +83,7 @@ export type ConversationWorkbenchMessage = {
   senderName?: string;
   avatar?: ConversationWorkbenchAvatar;
   text?: string;
+  content?: import("./conversation-timeline-types").ConversationWorkbenchContent;
   createdAtLabel: string;
   statusLabel?: string;
   statusTone?: ConversationWorkbenchTone;

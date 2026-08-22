@@ -16,7 +16,7 @@ test("Enterprise WeChat workspace renders official conversations inside Smart Ke
 
   assert.match(route, /routeId="wechatWorkWorkspace"/);
   assert.match(route, /WechatWorkWorkspacePage/);
-  assert.match(manifest, /wechatWorkWorkspace:[\s\S]*?href: "\/integrations\/wechat-work\/workspace"/);
+  assert.match(manifest, /wechatWorkWorkspace:[\s\S]*?href: "\/integrations\/wechat-work\/workspace"[\s\S]*?sectionId: "conversation-center"/);
   assert.match(page, /useConversationsController\(api \|\| conversationsFeatureApi, null, "detail"\)/);
   assert.match(page, /onChannelChange\("work_wechat"\)/);
   assert.match(page, /ConversationThreadPane/);

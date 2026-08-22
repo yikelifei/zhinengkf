@@ -11,8 +11,19 @@ export type ModularWorkbenchShellProps = {
   children: ReactNode;
 };
 
+type CompanyProfile = {
+  organization: { displayName: string };
+  workspace: { displayName: string; ownership: "company" };
+};
+
+const EMBEDDED_COMPANY_FALLBACK: CompanyProfile = {
+  organization: { displayName: "臻希礼业" },
+  workspace: { displayName: "臻希礼业企业工作台", ownership: "company" },
+};
+
 export function ModularWorkbenchShell({ route, children }: ModularWorkbenchShellProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [companyProfile, setCompanyProfile] = useState<CompanyProfile>(EMBEDDED_COMPANY_FALLBACK);
   const moduleNavigationRef = useRef<HTMLElement | null>(null);
   const activeModuleLinkRef = useRef<HTMLAnchorElement | null>(null);
   const siblingRoutes = useMemo(
@@ -22,7 +33,24 @@ export function ModularWorkbenchShell({ route, children }: ModularWorkbenchShell
     )),
     [route.sectionId],
   );
-  const hasModuleNavigation = siblingRoutes.length > 1;
+  const hasModuleNavigation = siblingRoutes.length > 1 && route.sectionId !== "design-platform-config";
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/company-profile", { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`company profile api ${response.status}`);
+        return response.json() as Promise<CompanyProfile>;
+      })
+      .then((profile) => {
+        if (profile?.workspace?.ownership !== "company" || !profile?.organization?.displayName) return;
+        setCompanyProfile(profile);
+      })
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+      });
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     const navigation = moduleNavigationRef.current;
@@ -42,6 +70,8 @@ export function ModularWorkbenchShell({ route, children }: ModularWorkbenchShell
       sidebar={{
         collapsed: sidebarCollapsed,
         onCollapsedChange: setSidebarCollapsed,
+        brandLabel: companyProfile.organization.displayName,
+        brandSubtitle: companyProfile.workspace.displayName,
       }}
       contentLabel={`${route.title}页面`}
     >

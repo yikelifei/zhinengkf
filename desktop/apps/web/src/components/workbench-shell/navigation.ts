@@ -1,7 +1,6 @@
 import {
   Bell,
   Bot,
-  AppWindow,
   CheckCircle,
   FileText,
   GraduationCap,
@@ -11,12 +10,12 @@ import {
   MessagesSquare,
   Package,
   Palette,
-  QrCode,
   Route,
   Send,
   Shield,
   Sparkles,
   Workflow,
+  UsersRound,
 } from "lucide-react";
 import { WORKBENCH_ROUTES } from "../../app/route-manifest";
 import type { WorkbenchNavigationGroup } from "./types";
@@ -34,22 +33,14 @@ export const DEFAULT_WORKBENCH_NAVIGATION: WorkbenchNavigationGroup[] = [
         mobilePriority: 1,
       },
       {
-        id: "wecom-workspace",
-        href: WORKBENCH_ROUTES.wechatWorkWorkspace.href,
-        label: "企业微信",
-        icon: AppWindow,
-        controlsId: "wecom-workspace",
-        mobilePriority: 2,
-      },
-      {
         id: "conversation-center",
-        href: WORKBENCH_ROUTES.conversations.href,
-        label: "会话管理",
+        href: WORKBENCH_ROUTES.wechatWorkWorkspace.href,
+        label: "企业微信会话",
         icon: MessagesSquare,
         controlsId: "conversation-center",
-        mobilePriority: 3,
+        mobilePriority: 2,
       },
-      { id: "review-center", href: WORKBENCH_ROUTES.reviewInbox.href, label: "人工审核", icon: CheckCircle, controlsId: "review-center", mobilePriority: 4 },
+      { id: "review-center", href: WORKBENCH_ROUTES.reviewInbox.href, label: "人工审核", icon: CheckCircle, controlsId: "review-center", mobilePriority: 3 },
     ],
   },
   {
@@ -58,9 +49,9 @@ export const DEFAULT_WORKBENCH_NAVIGATION: WorkbenchNavigationGroup[] = [
     items: [
       {
         id: "wechat-channel-center",
-        href: WORKBENCH_ROUTES.wechatWorkCustomers.href,
-        label: "客户入口",
-        icon: QrCode,
+        href: WORKBENCH_ROUTES.wechatWorkOperations.href,
+        label: "企业微信运营",
+        icon: UsersRound,
         controlsId: "wechat-channel-center",
       },
       { id: "sku-library", href: WORKBENCH_ROUTES.catalogProducts.href, label: "商品库", icon: Package, controlsId: "sku-library" },

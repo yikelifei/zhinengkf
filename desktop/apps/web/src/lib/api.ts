@@ -383,6 +383,11 @@ export type SkuImportFieldMapping = SkuImportField & {
   matched: boolean;
 };
 
+export type SkuDeleteResult = {
+  deletedSku: Sku;
+  removedAssetCount: number;
+};
+
 export type KnowledgeImportField = SkuImportField;
 
 export type KnowledgeImportRow = {
@@ -928,10 +933,20 @@ export type AiProviderStatus = {
     sharedSourceConfigured: boolean;
     issues: string[];
     requestFormat: string;
+    baseUrl: string;
+    apiEndpoint: string;
     model: string;
     routingTier: "economy" | "quality";
     docsUrl: string;
     keyOnlySetup: boolean;
+    balanceProbeSupported?: boolean;
+    balanceProbeLabel?: string;
+    billingCredentialKind?: "provider_api_key" | "alibaba_bss" | "openai_admin" | "console_only";
+    billingCredentialConfigured?: boolean;
+    billingQueryKind?: "balance" | "cost" | "console_only";
+    billingConsoleUrl?: string;
+    latestTest?: AiProviderResponseTestResult | null;
+    latestBalance?: AiProviderBalanceResult | null;
     performance: {
       sampleCount: number;
       successCount: number;
@@ -953,6 +968,75 @@ export type AiProviderStatus = {
     latencyMs?: number;
     error?: string;
   }>;
+};
+
+export type AiProviderServerEnvBundle = {
+  generated: true;
+  generatedAt: string;
+  filePath: string;
+  fileName: string;
+  envText: string;
+  providerCount: number;
+  configuredProviderCount: number;
+  missingProviders: Array<{
+    name: string;
+    label: string;
+    apiKeyEnv: string;
+    enabledEnv: string;
+    modelEnv: string;
+    baseUrlEnv: string;
+  }>;
+  includedProviders: Array<{
+    name: string;
+    label: string;
+    enabled: boolean;
+    apiKeyConfigured: boolean;
+    apiKeyEnv: string;
+    modelEnv: string;
+    baseUrlEnv: string;
+  }>;
+  copyHint: string;
+};
+
+export type AiProviderBalanceResult = {
+  checked: boolean;
+  supported: boolean;
+  metric: "balance" | "cost";
+  status: "available" | "insufficient" | "unsupported" | "error";
+  display: string;
+  amount: number | null;
+  currency: string | null;
+  endpoint: string;
+  checkedAt: string | null;
+  details: Array<{ label: string; value: string }>;
+  error?: string;
+};
+
+export type AiProviderResponseTestResult = {
+  tested: true;
+  testedAt: string;
+  provider: string;
+  label: string;
+  model: string;
+  enabled: boolean;
+  configured: boolean;
+  testUrl: string;
+  requestKind: "chat_completion";
+  expectedReply: string;
+  available: boolean;
+  latencyMs: number;
+  outputCharacters: number;
+  charactersPerSecond: number;
+  responsePreview: string;
+  replyMatched: boolean;
+  balance: AiProviderBalanceResult;
+  checks: Array<{
+    key: "configuration" | "connection" | "response" | "speed";
+    label: string;
+    ok: boolean;
+    detail: string;
+  }>;
+  error?: string;
 };
 
 export type DeliveryReadiness = {
@@ -1244,6 +1328,118 @@ export type WechatWorkConnectionDiagnosis = {
   blockerCode: string;
 };
 
+export type WechatWorkCustomerServiceOperations = {
+  checkedAt: string;
+  accountCount: number;
+  servicerCount: number;
+  manageableAccountCount: number;
+  directoryAvailable: boolean;
+  directoryError: string | null;
+  memberSource: "enterprise_directory" | "upgrade_service_members" | "assigned_servicers_only";
+  memberSourceDetail: string;
+  partial: boolean;
+  availableMembers: Array<{
+    userId: string;
+    displayName: string;
+    avatar: string;
+    departments: number[];
+    resolution: "user_get" | "user_get_alias" | "userid_fallback";
+  }>;
+  accounts: Array<{
+    openKfid: string;
+    name: string;
+    avatar: string;
+    managePrivilege: boolean;
+    configured: boolean;
+    servicerError: string | null;
+    servicers: Array<{
+      userId: string;
+      displayName: string;
+      avatar: string;
+      departments: number[];
+      resolution: "user_get" | "user_get_alias" | "userid_fallback";
+      status: number | null;
+      statusName: string;
+    }>;
+  }>;
+  proofBoundary: string;
+};
+
+export type WechatWorkCustomerServiceOperationResult = {
+  ok: boolean;
+  partial: boolean;
+  openKfid: string;
+  requested: number;
+  succeeded: number;
+  failed: number;
+  results: Array<{ userId: string; ok: boolean; errcode: number; errmsg: string }>;
+};
+
+export type WechatWorkCustomerServiceStatisticMetrics = {
+  sessionCount: number | null;
+  customerCount: number | null;
+  customerMessageCount: number | null;
+  upgradeServiceCustomerCount: number | null;
+  aiSessionReplyCount: number | null;
+  aiTransferRate: number | null;
+  aiKnowledgeHitRate: number | null;
+  replyRate: number | null;
+  firstReplyAverageSec: number | null;
+  satisfactionInvestigationCount: number | null;
+  satisfactionParticipationRate: number | null;
+  satisfiedRate: number | null;
+  middlingRate: number | null;
+  dissatisfiedRate: number | null;
+  upgradeServiceMemberInviteCount: number | null;
+  upgradeServiceMemberCustomerCount: number | null;
+  upgradeServiceGroupchatInviteCount: number | null;
+  upgradeServiceGroupchatCustomerCount: number | null;
+  messageRejectedCustomerCount: number | null;
+};
+
+export type WechatWorkCustomerServiceStatistics = {
+  schema: "smart_kefu_wechat_work_statistics_v1";
+  status: "ready" | "empty" | "permission_required" | "rate_limited" | "unavailable";
+  checkedAt: string;
+  period: {
+    startDate: string;
+    endDate: string;
+    startTime: number;
+    endTime: number;
+    dayCount: number;
+    availableThrough: string;
+  };
+  account: { openKfid: string; name: string };
+  corporate: {
+    daily: Array<{ statTime: number; date: string; metrics: WechatWorkCustomerServiceStatisticMetrics }>;
+    summary: WechatWorkCustomerServiceStatisticMetrics;
+  } | null;
+  servicerSummary: {
+    daily: Array<{ statTime: number; date: string; metrics: WechatWorkCustomerServiceStatisticMetrics }>;
+    summary: WechatWorkCustomerServiceStatisticMetrics;
+  } | null;
+  servicers: Array<{
+    userId: string;
+    displayName: string;
+    nameResolution: "user_get" | "user_get_alias" | "userid_fallback";
+    status: number | null;
+    statusName: string;
+    daily: Array<{ statTime: number; date: string; metrics: WechatWorkCustomerServiceStatisticMetrics }>;
+    summary: WechatWorkCustomerServiceStatisticMetrics;
+  }>;
+  partial: boolean;
+  partialReason: "rate_limited" | "servicer_errors" | null;
+  errors: Array<{ userId: string; code: string; message: string; apiErrcode: number | null }>;
+  error: {
+    status: "permission_required" | "rate_limited" | "unavailable";
+    code: string;
+    message: string;
+    apiErrcode: number | null;
+    retryAfterSeconds: number | null;
+  } | null;
+  proofBoundary: string;
+};
+
 export type WechatWorkCallbackEventStatus = {
   configured: boolean;
   connected: boolean;
@@ -1262,21 +1458,211 @@ export type WechatWorkCredentialValidation = {
   detail: string;
 };
 
+export type WechatWorkDesktopSetupOptions = {
+  corpId: string;
+  callbackToken: string;
+  encodingAesKey: string;
+  publicBaseUrl?: string;
+  enableAutomaticReplies: boolean;
+};
+
+export type WechatWorkCredentialSaveResult = {
+  saved: boolean;
+  secretConfigured: boolean;
+  account: WechatWorkCredentialValidation["accounts"][number];
+  restartRequired: boolean;
+  activation: {
+    activated: boolean;
+    sync: {
+      ok: boolean;
+      receivedCount: number;
+      processedCount: number;
+      failedCount: number;
+      errorMessage?: string;
+    };
+    customerEntry: {
+      ok: boolean;
+      entry: WechatWorkCustomerEntry | null;
+      errorMessage?: string;
+    };
+  };
+  detail: string;
+};
+
 export type WechatWorkUpgradeServiceConfig = {
   ready: boolean;
+  deliveryReady?: boolean;
   memberUserIds: string[];
+  memberOptions?: Array<{
+    userId: string;
+    displayName: string;
+    resolution?: "user_get" | "user_get_alias" | "userid_fallback";
+    errorCode?: number | null;
+  }>;
   departmentIds: number[];
   groupChatIds: string[];
+  customerContact?: {
+    configured: boolean;
+    ready: boolean;
+    credentialSource?: "external_contact_override" | "wechat_work_shared" | "none";
+    applications?: Array<{ agentId: number; name: string }>;
+    eligibleMemberUserIds: string[];
+    blockerCode?: string | null;
+    errcode?: number | null;
+    detail: string;
+    callback?: {
+      locallyReady: boolean;
+      url: string | null;
+      detail: string;
+    };
+  };
   detail: string;
 };
 
 export type WechatWorkCustomerUpgradeResult = {
   ok: boolean;
+  manualResend?: boolean;
   recommended: boolean;
   alreadyRecommended: boolean;
+  recommendationPending?: boolean;
   memberUserId: string;
   conversationId: string;
   customerId: string;
+  recommendationAuditId?: string;
+  recommendedAt?: string | null;
+  duplicateScope?: "customer_member";
+  deliveryMode?: "wechat_work_external_contact_qr" | string;
+  customerDeliveryApiAccepted?: boolean;
+  customerPhoneReceiptConfirmed?: boolean;
+  customerAddedSpecialistConfirmed?: boolean;
+  alreadyDelivered?: boolean;
+  deliveryPending?: boolean;
+  deliveryStatus?: string;
+  textStatus?: string;
+  imageStatus?: string;
+  sendTaskId?: string | null;
+  sendAttemptId?: string | null;
+  msgids?: string[];
+  contactWayConfigId?: string;
+  deliveryNote?: string;
+};
+
+export type WechatWorkCustomerUpgradeStatus = {
+  exists: boolean;
+  memberUserId: string;
+  status: string;
+  deliveryPending: boolean;
+  qrRecoveryAvailable?: boolean;
+  manualResendAvailable?: boolean;
+  customerDeliveryApiAccepted: boolean;
+  customerPhoneReceiptConfirmed: boolean;
+  customerAddedSpecialistConfirmed: boolean;
+  textStatus?: string;
+  imageStatus?: string;
+  sendTaskId?: string | null;
+  sendAttemptId?: string | null;
+  apiAcceptedAt?: string | null;
+  asyncFailedAt?: string | null;
+  halfAddedAt?: string | null;
+  identityVerifiedAt?: string | null;
+  addedAt?: string | null;
+  errorMessage?: string | null;
+  detail?: string;
+};
+
+export type AiProviderModelSyncResult = {
+  synced: true;
+  provider: string;
+  label: string;
+  source: "upstream";
+  endpoint: string;
+  fetchedAt: string;
+  models: Array<{ id: string; label: string }>;
+};
+
+export type WechatWorkCustomerUpgradeRetryResult = {
+  ok: boolean;
+  recovered: boolean;
+  recoveryDeferred?: boolean;
+  triggerMsgid: string | null;
+  status: WechatWorkCustomerUpgradeStatus;
+};
+
+export type WechatWorkCapabilityItem = {
+  key: string;
+  label: string;
+  status: string;
+  ready: boolean;
+  detail: string;
+  customerVisibleDelivery?: boolean;
+  requiresReceptionistAction?: boolean;
+  errcode?: number;
+};
+
+export type WechatWorkCapabilities = {
+  checkedAt: string;
+  configured: boolean;
+  checks: Array<{ key: string; env: string; ok: boolean; detail: string }>;
+  summary: {
+    total: number;
+    verified: number;
+    available: number;
+    availableUnverified: number;
+    partial: number;
+    blocked: number;
+    configMissing: number;
+  };
+  capabilities: WechatWorkCapabilityItem[];
+  proofBoundaries: string[];
+};
+
+export type WechatWorkServiceStateResult = {
+  ok: boolean;
+  serviceState: number | null;
+  serviceStateName: string;
+  servicerUserId: string | null;
+  msgCodePresent: boolean;
+  eventCredentialId: string | null;
+  eventCredentialExpiresAt: string | null;
+  proofBoundary: string;
+};
+
+export type WechatWorkCancelUpgradeResult = {
+  ok: boolean;
+  cancelled: boolean;
+  conversationId: string;
+  customerId: string;
+  customerVisibleDelivery: boolean;
+  deliveryNote: string;
+};
+
+export type WechatWorkEventTextResult = {
+  ok: boolean;
+  accepted: boolean;
+  sendTaskId: string;
+  sendAttemptId: string | null;
+  status: string;
+  msgid: string | null;
+  eventCredentialId: string;
+  proofBoundary: string;
+};
+
+export type WechatWorkEventMenuResult = WechatWorkEventTextResult;
+
+export type WechatWorkCustomerServiceMessagePayload = {
+  msgtype: "text" | "image" | "voice" | "video" | "file" | "link" | "miniprogram" | "msgmenu" | "location";
+  message?: Record<string, unknown>;
+  text?: Record<string, unknown>;
+  image?: Record<string, unknown>;
+  voice?: Record<string, unknown>;
+  video?: Record<string, unknown>;
+  file?: Record<string, unknown>;
+  link?: Record<string, unknown>;
+  miniprogram?: Record<string, unknown>;
+  msgmenu?: Record<string, unknown>;
+  location?: Record<string, unknown>;
+  mediaId?: string;
+  mediaPath?: string;
 };
 
 export type WechatAccount = {
@@ -1381,7 +1767,9 @@ export type ConversationIdentity = {
 export type ConversationAttachment = {
   id: string;
   assetId?: string;
-  kind: "image" | "file";
+  source?: string;
+  msgtype?: string;
+  kind: "image" | "voice" | "video" | "file";
   name: string;
   mimeType?: string;
   status: string;
@@ -1400,6 +1788,8 @@ export type ConversationTimelineItem = {
   wechatAccountId: string;
   direction: "inbound" | "outbound";
   text?: string;
+  messageType?: string;
+  content?: Record<string, unknown> | null;
   attachments: ConversationAttachment[];
   status: string;
   errorMessage?: string;
@@ -1772,6 +2162,13 @@ export type WechatChannelStatus = {
     needsSendAdapter?: number;
     needsConfig: number;
     pendingSendTasks: number;
+    queuedSendTasks?: number;
+    inFlightSendTasks?: number;
+    knownInFlightSendTasks?: number;
+    unknownDeliveryTasks?: number;
+    blockedSendTasks?: number;
+    failedSendTasks?: number;
+    sendAttentionTasks?: number;
     manualLockedConversations: number;
   };
   channels: WechatChannelStatusItem[];
@@ -2308,12 +2705,20 @@ export type DesignPlatformCandidateProbeResponse = {
   candidates: Array<{
     baseUrl: string;
     ok: boolean;
+    generationReady?: boolean;
     selected: boolean;
     latencyMs: number;
     statusCode?: number;
     service?: string;
     status?: string;
     version?: string;
+    runtimeChannel?: string;
+    generationBackend?: string;
+    localWorkspace?: boolean;
+    imageConfigured?: boolean;
+    imageModel?: string;
+    imageApiType?: string;
+    gptImageModel?: boolean;
     errorMessage?: string;
   }>;
 };
@@ -2471,6 +2876,23 @@ export type IdentityFilters = {
   assetRole?: string;
 };
 
+export type AgentTask = {
+  id: string;
+  operationKey: string;
+  status: string;
+  taskType: string;
+  lane?: string | null;
+  routeAction?: string | null;
+  objective?: string | null;
+  currentStep?: string | null;
+  errorMessage?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  steps?: Array<Record<string, unknown>>;
+  approvals?: Array<Record<string, unknown>>;
+  toolExecutions?: Array<Record<string, unknown>>;
+};
+
 export type IdentityExpectation = {
   expectedWechatAccountId?: string;
   expectedConversationId?: string;
@@ -2497,6 +2919,13 @@ export class ApiRequestError extends Error {
     this.trustedDesktopSessionRequired = Boolean(options.trustedDesktopSessionRequired);
   }
 }
+
+export type DesktopShellOpenResponse = {
+  ok: boolean;
+  action: "open_zhenxi_ai_desktop";
+  url: string;
+  pid: number | null;
+};
 
 export function isTrustedDesktopSessionError(error: unknown) {
   return error instanceof ApiRequestError && error.trustedDesktopSessionRequired;
@@ -2663,6 +3092,12 @@ async function patchJson<T>(path: string, body?: unknown): Promise<T> {
   return response.json();
 }
 
+async function deleteJson<T>(path: string): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, { method: "DELETE" });
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
 export async function getDesignJobs(filters: IdentityFilters = {}): Promise<DesignJob[]> {
   const response = await fetch(`${API_BASE}/design-jobs${identityQuery(filters)}`, { cache: "no-store" });
   if (!response.ok) throw await apiResponseError(response);
@@ -2696,14 +3131,21 @@ export async function uploadAsset(payload: UploadAssetPayload): Promise<DesignAs
   return postJson<DesignAsset>("/assets/upload", payload);
 }
 
-export function localAssetUrl(localPath?: string, expected: IdentityExpectation = {}): string {
+export function localAssetUrl(
+  localPath?: string,
+  expected: IdentityExpectation = {},
+  options: { thumbnail?: boolean; width?: number; height?: number } = {},
+): string {
   const value = String(localPath || "").trim();
   if (!value) return "";
   if (/^https?:\/\//i.test(value) || value.startsWith("data:")) return value;
   if (!/[\\/]storage[\\/]assets[\\/]/i.test(value)) return "";
   const params = new URLSearchParams(expectedIdentityQuery(expected).replace(/^\?/, ""));
   params.set("path", value);
-  return `${API_BASE}/assets/local-file?${params.toString()}`;
+  if (options.width) params.set("width", String(options.width));
+  if (options.height) params.set("height", String(options.height));
+  const route = options.thumbnail ? "/assets/local-file/thumbnail" : "/assets/local-file";
+  return `${API_BASE}${route}?${params.toString()}`;
 }
 
 export function localDesignImageUrl(
@@ -2785,6 +3227,10 @@ export async function restoreSku(skuCode: string): Promise<Sku> {
   return postJson<Sku>(`/catalog/skus/${encodeURIComponent(skuCode)}/restore`);
 }
 
+export async function deleteSku(skuCode: string): Promise<SkuDeleteResult> {
+  return deleteJson<SkuDeleteResult>(`/catalog/skus/${encodeURIComponent(skuCode)}`);
+}
+
 export async function getSkuCatalogAudit(): Promise<SkuCatalogAudit> {
   const response = await fetch(`${API_BASE}/catalog/skus/audit`, { cache: "no-store" });
   if (!response.ok) throw new Error(`api ${response.status}`);
@@ -2811,6 +3257,59 @@ export function localAssetByIdUrl(assetId?: string, expected: IdentityExpectatio
   if (!value) return "";
   const params = new URLSearchParams(expectedIdentityQuery(expected).replace(/^\?/, ""));
   return `${API_BASE}/assets/${encodeURIComponent(value)}/local-file?${params.toString()}`;
+}
+
+export async function getAgentTasks(filters: IdentityFilters & { status?: string; limit?: number } = {}): Promise<AgentTask[]> {
+  const params = new URLSearchParams(identityQuery(filters).replace(/^\?/, ""));
+  if (filters.status) params.set("status", filters.status);
+  if (filters.limit) params.set("limit", String(filters.limit));
+  const query = params.toString();
+  const response = await fetch(`${API_BASE}/agent-tasks${query ? `?${query}` : ""}`, { cache: "no-store" });
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function executeAgentTaskTool(
+  taskId: string,
+  executionId: string,
+  payload: { idempotencyKey: string; input?: Record<string, unknown> },
+): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>(
+    `/agent-tasks/${encodeURIComponent(taskId)}/tool-executions/${encodeURIComponent(executionId)}/execute`,
+    payload,
+  );
+}
+
+export async function previewAgentTaskTool(
+  taskId: string,
+  executionId: string,
+  payload: { idempotencyKey: string; input?: Record<string, unknown> },
+): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>(
+    `/agent-tasks/${encodeURIComponent(taskId)}/tool-executions/${encodeURIComponent(executionId)}/preview`,
+    payload,
+  );
+}
+
+export async function verifyAgentTaskTool(
+  taskId: string,
+  executionId: string,
+): Promise<Record<string, unknown>> {
+  return postJson<Record<string, unknown>>(
+    `/agent-tasks/${encodeURIComponent(taskId)}/tool-executions/${encodeURIComponent(executionId)}/verify`,
+  );
+}
+
+export function localConversationAttachmentUrl(
+  conversationId?: string,
+  messageId?: string,
+  attachmentId?: string,
+  expected: IdentityExpectation = {},
+): string {
+  const values = [conversationId, messageId, attachmentId].map((value) => String(value || "").trim());
+  if (values.some((value) => !value)) return "";
+  const params = new URLSearchParams(expectedIdentityQuery(expected).replace(/^\?/, ""));
+  return `${API_BASE}/wechat/conversations/${encodeURIComponent(values[0])}/messages/${encodeURIComponent(values[1])}/attachments/${encodeURIComponent(values[2])}?${params.toString()}`;
 }
 
 export async function executeAgentSkill(
@@ -3065,13 +3564,31 @@ export async function probeAiProviderStatus(): Promise<AiProviderStatus> {
 
 export async function saveAiProviderCredential(
   provider: string,
-  payload: { apiKey?: string; model?: string; enabled?: boolean },
+  payload: { apiKey?: string; baseUrl?: string; model?: string; enabled?: boolean },
 ): Promise<{ saved: boolean; restartRequired: boolean; detail: string; provider: AiProviderStatus["providers"][number] }> {
   const response = await fetch(`${API_BASE}/ai/providers/${encodeURIComponent(provider)}/credential`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
   });
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function generateAiProviderServerEnv(): Promise<AiProviderServerEnvBundle> {
+  const response = await fetch(`${API_BASE}/ai/providers/server-env`, { method: "POST" });
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function testAiProviderResponse(provider: string): Promise<AiProviderResponseTestResult> {
+  const response = await fetch(`${API_BASE}/ai/providers/${encodeURIComponent(provider)}/test`, { method: "POST" });
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function getAiProviderBalance(provider: string): Promise<AiProviderBalanceResult> {
+  const response = await fetch(`${API_BASE}/ai/providers/${encodeURIComponent(provider)}/balance`, { method: "POST" });
   if (!response.ok) throw await apiResponseError(response);
   return response.json();
 }
@@ -3140,33 +3657,85 @@ export async function diagnoseWechatWorkConnection(): Promise<WechatWorkConnecti
   return postJson<WechatWorkConnectionDiagnosis>("/wechat-work/kf/connection/diagnose", {});
 }
 
-export async function validateWechatWorkCustomerServiceSecret(secret: string): Promise<WechatWorkCredentialValidation> {
-  return postJson<WechatWorkCredentialValidation>("/wechat-work/kf/connection/validate-credential", { secret });
+export async function getWechatWorkCustomerServiceOperations(): Promise<WechatWorkCustomerServiceOperations> {
+  const response = await fetch(`${API_BASE}/wechat-work/kf/operations`, { cache: "no-store" });
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
 }
 
-export async function saveWechatWorkCustomerServiceCredential(secret: string, openKfid: string): Promise<{
-  saved: boolean;
-  secretConfigured: boolean;
-  account: WechatWorkCredentialValidation["accounts"][number];
-  restartRequired: boolean;
-  activation: {
-    activated: boolean;
-    sync: {
-      ok: boolean;
-      receivedCount: number;
-      processedCount: number;
-      failedCount: number;
-      errorMessage?: string;
-    };
-    customerEntry: {
-      ok: boolean;
-      entry: WechatWorkCustomerEntry | null;
-      errorMessage?: string;
-    };
-  };
-  detail: string;
-}> {
-  return postJson("/wechat-work/kf/connection/save-credential", { secret, openKfid });
+export async function getWechatWorkCustomerServiceStatistics(filters: {
+  openKfid: string;
+  startDate: string;
+  endDate: string;
+}): Promise<WechatWorkCustomerServiceStatistics> {
+  const params = new URLSearchParams({
+    openKfid: filters.openKfid,
+    startDate: filters.startDate,
+    endDate: filters.endDate,
+  });
+  const response = await fetch(`${API_BASE}/wechat-work/kf/statistics?${params.toString()}`, { cache: "no-store" });
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function createWechatWorkCustomerServiceAccount(payload: {
+  name: string;
+  avatarBase64: string;
+  avatarFileName: string;
+  avatarMimeType: string;
+  requestId: string;
+}): Promise<{ ok: true; openKfid: string; name: string }> {
+  return postJson("/wechat-work/kf/operations/accounts/create", payload);
+}
+
+export async function updateWechatWorkCustomerServiceAccount(payload: {
+  openKfid: string;
+  name?: string;
+  avatarBase64?: string;
+  avatarFileName?: string;
+  avatarMimeType?: string;
+  requestId: string;
+}): Promise<{ ok: true; openKfid: string; name: string }> {
+  return postJson("/wechat-work/kf/operations/accounts/update", payload);
+}
+
+export async function deleteWechatWorkCustomerServiceAccount(payload: {
+  openKfid: string;
+  confirmName: string;
+  requestId: string;
+}): Promise<{ ok: true; deleted: true; openKfid: string; name: string }> {
+  return postJson("/wechat-work/kf/operations/accounts/delete", payload);
+}
+
+export async function addWechatWorkCustomerServiceServicers(payload: {
+  openKfid: string;
+  userIds: string[];
+  requestId: string;
+}): Promise<WechatWorkCustomerServiceOperationResult> {
+  return postJson("/wechat-work/kf/operations/servicers/add", payload);
+}
+
+export async function deleteWechatWorkCustomerServiceServicers(payload: {
+  openKfid: string;
+  userIds: string[];
+  requestId: string;
+}): Promise<WechatWorkCustomerServiceOperationResult> {
+  return postJson("/wechat-work/kf/operations/servicers/delete", payload);
+}
+
+export async function validateWechatWorkCustomerServiceSecret(
+  secret: string,
+  corpId?: string,
+): Promise<WechatWorkCredentialValidation> {
+  return postJson<WechatWorkCredentialValidation>("/wechat-work/kf/connection/validate-credential", { secret, corpId });
+}
+
+export async function saveWechatWorkCustomerServiceCredential(
+  secret: string,
+  openKfid: string,
+  setup?: WechatWorkDesktopSetupOptions,
+): Promise<WechatWorkCredentialSaveResult> {
+  return postJson("/wechat-work/kf/connection/save-credential", { secret, openKfid, ...(setup || {}) });
 }
 
 export async function importWechatWorkCustomerEntry(url: string): Promise<WechatWorkCustomerEntry> {
@@ -3185,6 +3754,34 @@ export async function getWechatWorkUpgradeServiceConfig(): Promise<WechatWorkUpg
   return response.json();
 }
 
+export async function getWechatWorkCustomerUpgradeStatus(
+  identity: ConversationIdentity,
+  memberUserId: string,
+): Promise<WechatWorkCustomerUpgradeStatus> {
+  const params = new URLSearchParams({ ...identity, memberUserId });
+  const response = await fetch(`${API_BASE}/wechat-work/kf/upgrade-service/status?${params.toString()}`, { cache: "no-store" });
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function saveWechatWorkCustomerContactCredential(secret: string): Promise<{
+  saved: boolean;
+  secretConfigured: boolean;
+  valid: boolean;
+  configuredMemberCount: number;
+  eligibleMemberCount: number;
+  eligibleMemberUserIds: string[];
+  detail: string;
+}> {
+  return postJson("/wechat-work/kf/connection/save-customer-contact-credential", { secret });
+}
+
+export async function getWechatWorkCapabilities(): Promise<WechatWorkCapabilities> {
+  const response = await fetch(`${API_BASE}/wechat-work/kf/capabilities`, { cache: "no-store" });
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
 export async function upgradeWechatWorkCustomerService(
   identity: ConversationIdentity,
   memberUserId: string,
@@ -3195,6 +3792,125 @@ export async function upgradeWechatWorkCustomerService(
     ...identity,
     memberUserId,
     wording,
+    requestId,
+  });
+}
+
+export async function saveAiProviderBillingCredential(
+  provider: string,
+  payload: { accessKeyId?: string; accessKeySecret?: string; adminKey?: string },
+): Promise<{ saved: boolean; restartRequired: boolean; detail: string; provider: AiProviderStatus["providers"][number] }> {
+  const response = await fetch(`${API_BASE}/ai/providers/${encodeURIComponent(provider)}/billing-credential`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function syncAiProviderModels(provider: string): Promise<AiProviderModelSyncResult> {
+  const response = await fetch(`${API_BASE}/ai/providers/${encodeURIComponent(provider)}/models/sync`, { method: "POST" });
+  if (!response.ok) throw await apiResponseError(response);
+  return response.json();
+}
+
+export async function retryWechatWorkCustomerUpgradeQr(
+  identity: ConversationIdentity,
+  memberUserId: string,
+): Promise<WechatWorkCustomerUpgradeRetryResult> {
+  return postJson<WechatWorkCustomerUpgradeRetryResult>("/wechat-work/kf/customers/upgrade-service/retry-qr", {
+    ...identity,
+    memberUserId,
+  });
+}
+
+export async function resendWechatWorkCustomerUpgradeQr(
+  identity: ConversationIdentity,
+  memberUserId: string,
+  wording: string,
+  requestId: string,
+): Promise<WechatWorkCustomerUpgradeResult> {
+  return postJson<WechatWorkCustomerUpgradeResult>("/wechat-work/kf/customers/upgrade-service/resend-qr", {
+    ...identity,
+    memberUserId,
+    wording,
+    requestId,
+  });
+}
+
+export async function cancelWechatWorkCustomerUpgradeService(
+  identity: ConversationIdentity,
+  requestId: string,
+): Promise<WechatWorkCancelUpgradeResult> {
+  return postJson<WechatWorkCancelUpgradeResult>("/wechat-work/kf/customers/cancel-upgrade-service", {
+    ...identity,
+    requestId,
+  });
+}
+
+export async function getWechatWorkCustomerServiceState(
+  identity: ConversationIdentity,
+): Promise<WechatWorkServiceStateResult> {
+  return postJson<WechatWorkServiceStateResult>("/wechat-work/kf/customers/service-state/get", identity);
+}
+
+export async function transferWechatWorkCustomerServiceState(
+  identity: ConversationIdentity,
+  serviceState: number,
+  servicerUserId: string | undefined,
+  requestId: string,
+): Promise<WechatWorkServiceStateResult> {
+  return postJson<WechatWorkServiceStateResult>("/wechat-work/kf/customers/service-state/transfer", {
+    ...identity,
+    serviceState,
+    servicerUserId,
+    requestId,
+  });
+}
+
+export async function sendWechatWorkEventText(
+  identity: ConversationIdentity,
+  eventCredentialId: string,
+  text: string,
+  requestId: string,
+  msgid?: string,
+): Promise<WechatWorkEventTextResult> {
+  return postJson<WechatWorkEventTextResult>("/wechat-work/kf/events/send-text", {
+    ...identity,
+    eventCredentialId,
+    text,
+    requestId,
+    msgid,
+  });
+}
+
+export async function sendWechatWorkEventMenu(
+  identity: ConversationIdentity,
+  eventCredentialId: string,
+  msgmenu: Record<string, unknown>,
+  requestId: string,
+  msgid?: string,
+): Promise<WechatWorkEventMenuResult> {
+  return postJson<WechatWorkEventMenuResult>("/wechat-work/kf/events/send-menu", {
+    ...identity,
+    eventCredentialId,
+    msgmenu,
+    requestId,
+    msgid,
+  });
+}
+
+export async function queueWechatWorkCustomerServiceMessage(
+  openKfid: string,
+  externalUserId: string,
+  messages: WechatWorkCustomerServiceMessagePayload[],
+  requestId: string,
+): Promise<{ ok: boolean; queued: boolean; task: SendTask }> {
+  return postJson<{ ok: boolean; queued: boolean; task: SendTask }>("/wechat-work/kf/send-message", {
+    openKfid,
+    externalUserId,
+    messages,
     requestId,
   });
 }
@@ -4019,6 +4735,10 @@ export async function getDesignPlatformCandidates(): Promise<DesignPlatformCandi
   const response = await fetch(`${API_BASE}/integrations/design-platform/candidates`, { cache: "no-store" });
   if (!response.ok) throw await apiResponseError(response);
   return response.json();
+}
+
+export async function openDesktopZhenxiAi(): Promise<DesktopShellOpenResponse> {
+  return postJson<DesktopShellOpenResponse>("/desktop-shell/open-zhenxi-ai", {});
 }
 
 export async function updateDesignPlatformConfig(payload: {

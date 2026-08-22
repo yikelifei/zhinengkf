@@ -7,10 +7,14 @@ import {
   getOperatorAccessStatus,
   getSendTasks,
   getWechatWorkUpgradeServiceConfig,
+  getWechatWorkCustomerUpgradeStatus,
   getWechatConversations,
   markConversationMessagesRead,
   queueManualConversationReply,
   refreshWechatWorkCustomerProfile,
+  resendWechatWorkCustomerUpgradeQr,
+  retryWechatWorkCustomerUpgradeQr,
+  saveWechatWorkCustomerContactCredential,
   setConversationManualLock,
   uploadAsset,
   updateConversationOperations,
@@ -32,7 +36,11 @@ export type ConversationsFeatureApi = {
   updateConversationOperations: typeof updateConversationOperations;
   generateConversationReplySuggestion: typeof generateConversationReplySuggestion;
   refreshWechatWorkCustomerProfile: typeof refreshWechatWorkCustomerProfile;
+  resendWechatWorkCustomerUpgradeQr: typeof resendWechatWorkCustomerUpgradeQr;
+  retryWechatWorkCustomerUpgradeQr: typeof retryWechatWorkCustomerUpgradeQr;
   getWechatWorkUpgradeServiceConfig: typeof getWechatWorkUpgradeServiceConfig;
+  getWechatWorkCustomerUpgradeStatus: typeof getWechatWorkCustomerUpgradeStatus;
+  saveWechatWorkCustomerContactCredential: typeof saveWechatWorkCustomerContactCredential;
   upgradeWechatWorkCustomerService: typeof upgradeWechatWorkCustomerService;
 };
 
@@ -51,6 +59,10 @@ export const conversationsFeatureApi: ConversationsFeatureApi = {
   updateConversationOperations,
   generateConversationReplySuggestion,
   refreshWechatWorkCustomerProfile,
+  resendWechatWorkCustomerUpgradeQr,
+  retryWechatWorkCustomerUpgradeQr,
   getWechatWorkUpgradeServiceConfig,
+  getWechatWorkCustomerUpgradeStatus,
+  saveWechatWorkCustomerContactCredential,
   upgradeWechatWorkCustomerService,
 };

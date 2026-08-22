@@ -12,6 +12,7 @@
   min-width: 0;
   height: 100%;
   min-height: 0;
+  overflow: hidden;
   grid-template-columns: var(--wk-sidebar-width) minmax(0, 1fr);
   color: var(--workbench-text);
   background: var(--workbench-canvas);
@@ -36,6 +37,7 @@
   min-width: 0;
   height: 100%;
   min-height: 0;
+  overflow: hidden;
   border-right: 1px solid var(--workbench-border, #e5e6eb);
   color: var(--workbench-text, #1d2129);
   background: var(--workbench-surface, #ffffff);
@@ -260,7 +262,9 @@
 .mainColumn {
   display: grid;
   min-width: 0;
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
   grid-template-rows: 60px minmax(0, 1fr);
 }
 
@@ -430,9 +434,14 @@ button.healthSummary:hover .healthDetail {
 }
 
 .shellContent {
+  position: relative;
   min-width: 0;
+  height: 100%;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   background: var(--workbench-canvas, #f7f8fa);
 }
 

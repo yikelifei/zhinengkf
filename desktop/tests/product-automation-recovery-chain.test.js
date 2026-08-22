@@ -82,16 +82,18 @@ test("integration recovery links exist, retain a single trusted identity, and ch
   }
 });
 
-test("dangerous provider actions need fresh state and two separate confirmations", () => {
+test("provider writes need fresh state while realtime probes require explicit confirmation", () => {
   const page = read("apps/web/src/features/system/ai-models-page.tsx");
-  const setup = read("apps/web/src/features/system/ai-provider-credential-setup.tsx");
-  assert.match(page, /disabled=\{pageBusy \|\| readState !== "ready" \|\| manageAccess\.readState !== "ready" \|\| !manageAccess\.allowed\}/);
+  const manager = read("apps/web/src/features/system/ai-model-provider-manager.tsx");
+  assert.match(page, /const trusted = readState === "ready" && manageAccess\.readState === "ready" && manageAccess\.allowed && !pageBusy/);
+  assert.match(page, /disabled=\{!trusted\}/);
   assert.match(page, /可能产生费用、配额消耗和外部审计记录/);
   assert.match(page, /探活失败也不会自动重试/);
-  assert.match(setup, /onSave\(provider, provider\.enabled\)/);
-  assert.match(setup, /data-action-id=\{`ai-models-provider-\$\{provider\.name\}-enable-request`\}/);
-  assert.match(setup, /disabled=\{!configurationTrusted \|\| savingProvider === pendingChange\.provider\.name\}/);
-  assert.doesNotMatch(setup, /保存并启用/);
+  assert.match(page, /data-action-id="ai-models-probe-confirm"/);
+  assert.match(page, /if \(trusted\) void refresh\(true\)/);
+  assert.match(manager, /data-action-id=\{`ai-models-provider-\$\{selected\.name\}-\$\{selected\.enabled \? "disable" : "enable"\}`\}/);
+  assert.match(manager, /disabled=\{!editable \|\| !props\.trusted \|\| props\.savingProvider === selected\.name\}/);
+  assert.match(manager, /已保存密钥永不回显/);
 });
 
 test("agent and delivery stale reads stay visible but block dangerous follow-up actions", () => {

@@ -29,6 +29,33 @@ export class AssetsController {
     return this.assets.upload(payload);
   }
 
+  @Get("local-file/thumbnail")
+  async localFileThumbnail(
+    @Query("path") localPath: string,
+    @Query("width") width: string,
+    @Query("height") height: string,
+    @Query("wechatAccountId") wechatAccountId: string,
+    @Query("conversationId") conversationId: string,
+    @Query("customerId") customerId: string,
+    @Res() reply: FastifyReply,
+  ) {
+    const file = await this.assets.readLocalAssetThumbnail(
+      localPath,
+      {
+        expectedWechatAccountId: wechatAccountId,
+        expectedConversationId: conversationId,
+        expectedCustomerId: customerId,
+      },
+      {
+        width: width ? Number(width) : undefined,
+        height: height ? Number(height) : undefined,
+      },
+    );
+    applySafeLocalFileHeaders(reply, file);
+    reply.header("Cache-Control", "private, max-age=86400, stale-while-revalidate=604800");
+    return reply.send(file.stream);
+  }
+
   @Get("local-file")
   async localFile(
     @Query("path") localPath: string,

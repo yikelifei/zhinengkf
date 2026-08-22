@@ -35,6 +35,7 @@
 | 接入 | `/integrations/channels` | 查看所有通道状态并导航到配置或验收页 | 刷新通道 |
 | 企业微信 | `/integrations/wechat-work` | 做本地配置检查和只读上线预检 | 运行只读预检 |
 | 企业微信 | `/integrations/wechat-work/workspace` | 直接承载本机已登录的企业微信 Windows 原生窗口，并在离开页面时恢复 | 连接企业微信原生窗口 |
+| 企业微信 | `/integrations/wechat-work/operations` | 运营微信客服账号、接待人员和可见企业成员 | 刷新企业微信运营数据 |
 | 企业微信 | `/integrations/wechat-work/customers` | 生成官方客服链接和二维码，检查长期客户升级配置 | 生成客户二维码 |
 | 企业微信 | `/integrations/wechat-work/flow` | 核对回调、入站、路由和发送流程 | 检查接入流程 |
 | 企业微信 | `/integrations/wechat-work/settings` | 只读核对本机配置、回调地址和身份策略 | 刷新配置检查 |

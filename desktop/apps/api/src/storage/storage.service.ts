@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import sharp from "sharp";
 import { appConfig } from "../shared/app-config";
 import { MAX_IMAGE_FINGERPRINT_BYTES } from "../shared/image-fingerprint";
 import { assertDeclaredAssetMimeType, inspectSafeAssetContent } from "./asset-content-security";
@@ -134,6 +136,52 @@ export class StorageService {
       sizeBytes: buffer.length,
       fileName: path.basename(canonicalPath),
       inlineSafe: content.inlineSafe,
+    };
+  }
+
+  async readLocalImageThumbnail(localPath: string, options: { width?: number; height?: number } = {}): Promise<{
+    stream: Readable;
+    mimeType: string;
+    sizeBytes: number;
+    fileName: string;
+    inlineSafe: boolean;
+  }> {
+    const resolved = this.resolveStoragePath(localPath);
+    let canonicalPath: string;
+    try {
+      canonicalPath = await fs.realpath(resolved);
+    } catch {
+      throw new NotFoundException("asset file not found");
+    }
+    await this.assertCanonicalStoragePath(canonicalPath);
+    const stat = await fs.stat(canonicalPath);
+    if (!stat.isFile()) throw new NotFoundException("asset file not found");
+    assertAssetByteLength(stat.size);
+    const width = normalizeThumbnailDimension(options.width, 360);
+    const height = normalizeThumbnailDimension(options.height, 270);
+    const baseName = path.basename(canonicalPath, path.extname(canonicalPath)) || "asset";
+    const cachePath = thumbnailCachePath(canonicalPath, stat, width, height);
+    const cached = await readCachedThumbnail(cachePath, baseName);
+    if (cached) return cached;
+
+    const buffer = await fs.readFile(canonicalPath);
+    await inspectSafeAssetContent(buffer, path.basename(canonicalPath), {
+      allowPdf: false,
+      allowText: false,
+      allowRaster: true,
+    });
+    const thumbnail = await sharp(buffer, { animated: false, limitInputPixels: 100_000_000 })
+      .rotate()
+      .resize(width, height, { fit: "inside", withoutEnlargement: true, kernel: sharp.kernel.lanczos3 })
+      .webp({ quality: 75, effort: 4 })
+      .toBuffer();
+    await writeCachedThumbnail(cachePath, thumbnail);
+    return {
+      stream: Readable.from(thumbnail),
+      mimeType: "image/webp",
+      sizeBytes: thumbnail.length,
+      fileName: `${baseName}-thumb.webp`,
+      inlineSafe: true,
     };
   }
 
@@ -330,6 +378,52 @@ function assertAssetSize(buffer: Buffer): Buffer {
 
 function assertAssetByteLength(byteLength: number): void {
   if (byteLength > MAX_IMAGE_FINGERPRINT_BYTES) throw assetSizeException();
+}
+
+function normalizeThumbnailDimension(value: unknown, fallback: number) {
+  const numeric = Math.floor(Number(value || 0));
+  if (!Number.isFinite(numeric) || numeric <= 0) return fallback;
+  return Math.min(1024, Math.max(32, numeric));
+}
+
+function thumbnailCachePath(canonicalPath: string, stat: { size: number; mtimeMs: number }, width: number, height: number) {
+  const root = path.resolve(appConfig.localStorageRoot);
+  const relative = path.relative(root, canonicalPath).toLocaleLowerCase("zh-CN");
+  const key = createHash("sha256")
+    .update(["v1", relative, String(stat.size), String(Math.floor(stat.mtimeMs)), String(width), String(height)].join("\n"))
+    .digest("hex");
+  return path.join(root, ".cache", "thumbnails", key.slice(0, 2), `${key}.webp`);
+}
+
+async function readCachedThumbnail(cachePath: string, baseName: string) {
+  try {
+    const stat = await fs.stat(cachePath);
+    if (!stat.isFile()) return null;
+    const thumbnail = await fs.readFile(cachePath);
+    return {
+      stream: Readable.from(thumbnail),
+      mimeType: "image/webp",
+      sizeBytes: thumbnail.length,
+      fileName: `${baseName}-thumb.webp`,
+      inlineSafe: true,
+    };
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function writeCachedThumbnail(cachePath: string, thumbnail: Buffer) {
+  await fs.mkdir(path.dirname(cachePath), { recursive: true });
+  const tempPath = `${cachePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tempPath, thumbnail);
+  try {
+    await fs.rename(tempPath, cachePath);
+  } catch (error: any) {
+    if (error?.code !== "EEXIST") throw error;
+  } finally {
+    await fs.rm(tempPath, { force: true }).catch(() => undefined);
+  }
 }
 
 function assetSizeException(): BadRequestException {

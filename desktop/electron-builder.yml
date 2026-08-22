@@ -12,6 +12,7 @@ files:
   - apps/electron/packaged-runtime.js
   - apps/electron/desktop-session-refresh.js
   - apps/electron/zhenxi-embedded-view.js
+  - apps/electron/zhenxi-shared-session.js
   - apps/electron/zhenxi-embedded-preload.js
   - packages/runtime/packaged-readiness-proof.js
   - packages/runtime/service-environment.js
@@ -29,6 +30,12 @@ asarUnpack:
   - node_modules/@prisma/client/**/*
 
 extraResources:
+  - from: config/company-profile.json
+    to: company/company-profile.json
+  - from: config
+    to: cloud
+    filter:
+      - cloud-client.env
   - from: dist/apps/api
     to: services/api
     filter:
@@ -62,6 +69,9 @@ extraResources:
     filter:
       - '**/*'
       - '!**/*.map'
+      - '!**/*.tmp*'
+      - '!**/query_engine-*.tmp*'
+      - '!**/libquery_engine-*.tmp*'
   - from: .package-runtime/node_modules
     to: services/runtime-root/node_modules
     filter:

@@ -86,7 +86,7 @@ test("isolated inbound reply queue sends only low-risk inbound text automation",
   assert.equal(store.getSendTask(unrelated.id).status, "queued");
 });
 
-test("one account can serve multiple customers in one fair bounded queue cycle", async () => {
+test("a non-window adapter serves every customer without a per-account queue cap", async () => {
   const adapter = {
     describe: () => ({
       name: "dry_run",
@@ -135,14 +135,14 @@ test("one account can serve multiple customers in one fair bounded queue cycle",
     perAccountLimit: 2,
   });
 
-  assert.equal(result.processed.length, 3);
+  assert.equal(result.processed.length, 4);
   assert.deepEqual(
     result.processed.map((item) => item.task.id),
-    [tasks[0].id, tasks[3].id, tasks[1].id],
+    [tasks[0].id, tasks[3].id, tasks[1].id, tasks[2].id],
   );
-  assert.equal(result.processed.filter((item) => item.task.wechatAccountId === firstAccountBindings[0].wechatAccountId).length, 2);
-  assert.equal(store.getSendTask(tasks[2].id).status, "queued");
-  assert.equal(result.skipped.some((item) => item.sendTaskId === tasks[2].id && item.reason === "account_cycle_limit_reached"), true);
+  assert.equal(result.processed.filter((item) => item.task.wechatAccountId === firstAccountBindings[0].wechatAccountId).length, 3);
+  assert.equal(store.getSendTask(tasks[2].id).status, "dry_run");
+  assert.equal(result.skipped.some((item) => item.reason === "account_cycle_limit_reached"), false);
 });
 
 test("safe inbound reply uses AI after rules and scoped knowledge", async () => {
@@ -165,6 +165,110 @@ test("safe inbound reply uses AI after rules and scoped knowledge", async () => 
   assert.equal(result.route.replyDraft.aiAssistance.historyTurns, calls[0].conversationHistory.length);
   assert.equal(result.route.replyDraft.aiAssistance.historyTurns >= 1, true);
   assert.equal(result.sendTask.payload.text, result.route.suggestedReply);
+});
+
+test("an unclear follow-up with conversation history uses the model instead of the generic scene menu", async () => {
+  const calls = [];
+  const ai = {
+    generateInboundSuggestion: async (input) => {
+      calls.push(input);
+      return {
+        text: "您是在问上一张贺卡的修改进度，我先按刚才的贺卡要求继续核对。",
+        provider: "context-test",
+        model: "context-model",
+        attempts: 1,
+      };
+    },
+  };
+  const { store, service } = setup(ai);
+  store.createMessage({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+    externalId: "unclear-followup-history",
+    direction: "inbound",
+    text: "上一张贺卡需要把花去掉",
+  });
+
+  const result = await service.processInboundMessage({
+    externalId: "unclear-followup-current",
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+    text: "这个呢？",
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].conversationHistory.some((item) => item.content.includes("上一张贺卡")), true);
+  assert.equal(result.route.replyDraft.aiAssistance.used, true);
+  assert.equal(result.route.replyDraft.aiAssistance.authority, "rules_and_scoped_knowledge");
+  assert.doesNotMatch(result.route.suggestedReply, /商品咨询、设计效果图、订单付款/);
+});
+
+test("a generation status question never becomes paid creative copy or a new design job", async () => {
+  let aiCalls = 0;
+  const ai = {
+    generateInboundSuggestion: async () => {
+      aiCalls += 1;
+      throw new Error("verified tool status must not be replaced by model output");
+    },
+  };
+  const { store, service } = setup(ai);
+  const priorMessage = store.createMessage({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+    externalId: "pending-card-plan-message",
+    direction: "inbound",
+    text: "贺卡要加上文案和 Logo",
+  });
+  store.createRouteEvaluation(
+    {
+      operationKey: "pending-card-plan-route",
+      wechatAccountId: "wechat_demo_1",
+      conversationId: "conversation_demo_1",
+      customerId: "customer_demo_1",
+      messageId: priorMessage.id,
+      text: priorMessage.text,
+    },
+    {
+      agentKey: "gift_design",
+      scene: "礼盒设计",
+      action: "collect_info",
+      confidence: 0.5,
+      missingFields: ["copy_text"],
+      suggestedReply: "请补充贺卡文案。",
+      replyDraft: {
+        source: "rule_based",
+        customerToolPlan: {
+          kind: "clarify",
+          module: "customer_creative",
+          planId: "customer-creative:pending-card-plan",
+          requestedDeliverables: ["greeting_card"],
+          missingFields: ["copy_text"],
+          logoMode: "provided",
+          assetIds: ["asset-logo-1"],
+        },
+      },
+    },
+  );
+
+  const beforeJobs = store.listDesignJobs().length;
+  const result = await service.processInboundMessage({
+    externalId: "generation-status-question",
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+    text: "生成好了吗",
+  });
+
+  assert.equal(aiCalls, 0);
+  assert.equal(store.listDesignJobs().length, beforeJobs);
+  assert.equal(result.plan.shouldCreateDesignJob, false);
+  assert.equal(result.route.replyDraft.customerToolPlan.kind, "status");
+  assert.equal(result.route.replyDraft.aiAssistance.authority, "verified_design_job_status");
+  assert.match(result.sendTask.payload.text, /还没有开始生成/);
+  assert.doesNotMatch(result.sendTask.payload.text, /正在.*生成|生成 4 张/);
 });
 
 test("reviewed Xiaoshi verbatim RAG match skips model rewriting", async () => {
@@ -562,6 +666,169 @@ test("high-risk inbound is forced to human without calling AI", async () => {
   assert.equal(result.manualLock.conversation.manualLocked, true);
 });
 
+test("low-risk generic follow-up queues a deterministic reply without manual takeover", async () => {
+  const ai = { generateInboundSuggestion: async () => { throw new Error("provider unavailable"); } };
+  const { store, service } = setup(ai);
+  const result = await service.processInboundMessage({
+    externalId: "low-risk-generic-followup",
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+    text: "可以了吗",
+  });
+
+  assert.equal(result.plan.reason, "low_risk_generic_followup");
+  assert.equal(result.plan.shouldQueueReply, true);
+  assert.equal(result.sendTask.status, "queued");
+  assert.match(result.sendTask.payload.text, /继续按当前信息处理/);
+  assert.equal(result.manualLock, undefined);
+  assert.equal(result.notification, null);
+  assert.equal(store.listConversations().find((item) => item.id === "conversation_demo_1").manualLocked, false);
+});
+
+test("a newer inbound message supersedes the older queued automatic reply", async (t) => {
+  const previousCorpId = appConfig.wechatWorkCorpId;
+  const previousSecret = appConfig.wechatWorkSecret;
+  appConfig.wechatWorkCorpId = "corp-latest-inbound";
+  appConfig.wechatWorkSecret = "secret-latest-inbound";
+  t.after(() => {
+    appConfig.wechatWorkCorpId = previousCorpId;
+    appConfig.wechatWorkSecret = previousSecret;
+  });
+  const adapter = {
+    describe: () => ({
+      name: "dry_run",
+      realSend: false,
+      capabilities: { requiresWindowGuard: false },
+    }),
+    execute: () => ({ status: "dry_run", metadata: { latestInboundOnly: true } }),
+  };
+  const { store, service } = setup(undefined, adapter);
+  const binding = store.upsertWechatWorkBinding({
+    openKfid: "wk-latest-inbound",
+    externalUserId: "wm-latest-inbound",
+  });
+  const first = await service.processInboundMessage({
+    externalId: "superseded-inbound-first",
+    wechatAccountId: binding.wechatAccountId,
+    conversationId: binding.conversationId,
+    customerId: binding.customerId,
+    text: "可以了吗",
+  });
+  const second = await service.processInboundMessage({
+    externalId: "superseded-inbound-second",
+    wechatAccountId: binding.wechatAccountId,
+    conversationId: binding.conversationId,
+    customerId: binding.customerId,
+    text: "现在有进展了吗",
+  });
+  assert.equal(first.sendTask.status, "queued");
+  assert.equal(second.sendTask.status, "queued");
+  const cancelledBeforeDispatch = store.getSendTask(first.sendTask.id);
+  assert.equal(cancelledBeforeDispatch.status, "cancelled");
+  assert.equal(cancelledBeforeDispatch.guardSnapshot.latestInboundMessageId, second.message.id);
+
+  const queue = await service.processSafeSendQueue({ adapter: "dry_run", automationOnly: true });
+
+  assert.equal(queue.processed.length, 1, JSON.stringify(queue));
+  assert.equal(queue.processed[0].task.id, second.sendTask.id);
+  const cancelled = store.getSendTask(first.sendTask.id);
+  assert.equal(cancelled.status, "cancelled");
+  assert.equal(cancelled.guardSnapshot.latestInboundMessageId, second.message.id);
+});
+
+test("generic follow-up is not auto-sent when recent context is order or logistics", async () => {
+  const ai = { generateInboundSuggestion: async () => { throw new Error("provider unavailable"); } };
+  const { store, service } = setup(ai);
+  const message = store.createMessage({
+    externalId: "risky-context-logistics-message",
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+    text: "物流快递单号 456 已停滞两天，请帮我查物流进度",
+  });
+  store.createRouteEvaluation(
+    {
+      operationKey: "risky-context-logistics-route",
+      wechatAccountId: "wechat_demo_1",
+      conversationId: "conversation_demo_1",
+      customerId: "customer_demo_1",
+      messageId: message.id,
+      text: "物流快递单号 456 已停滞两天，请帮我查物流进度",
+    },
+    {
+      agentKey: "logistics_exception",
+      scene: "物流异常跟进",
+      action: "manual_review",
+      confidence: 0.62,
+      riskFlags: [],
+      suggestedReply: "收到，我先核对订单和物流节点后再给您明确答复。",
+      routingPolicy: {
+        lane: "manual_review",
+        handler: "human",
+        reason: "物流异常需要人工核实",
+        safeguards: ["human_approval_required"],
+      },
+      replyDraft: {
+        source: "rule",
+        nextAction: "verify_order_and_logistics",
+        ruleSuggestedReply: "收到，我先核对订单和物流节点后再给您明确答复。",
+      },
+    },
+  );
+
+  const result = await service.processInboundMessage({
+    externalId: "risky-context-generic-followup",
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+    text: "可以了吗",
+  });
+
+  assert.notEqual(result.plan.reason, "low_risk_generic_followup");
+  assert.equal(result.plan.shouldQueueReply, false);
+  assert.equal(result.sendTask, null);
+  assert.equal(result.manualLock.conversation.manualLocked, true);
+  assert.equal(store.listSendTasks({ conversationId: "conversation_demo_1" }).length, 0);
+});
+
+test("generic follow-up is not auto-sent when an active quote already exists", async () => {
+  const ai = { generateInboundSuggestion: async () => { throw new Error("provider unavailable"); } };
+  const { store, service } = setup(ai);
+  const data = store.read();
+  data.quoteDrafts.push({
+    id: "quote-active-generic-followup",
+    customerId: "customer_demo_1",
+    conversationId: "conversation_demo_1",
+    wechatAccountId: "wechat_demo_1",
+    designJobId: "design-job-placeholder",
+    quantity: 100,
+    unitPrice: 18,
+    totalPrice: 1800,
+    totalCost: 1200,
+    profit: 600,
+    status: "sent",
+    paymentStatus: "unpaid",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  store.write(data);
+
+  const result = await service.processInboundMessage({
+    externalId: "active-quote-generic-followup",
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+    text: "可以了吗",
+  });
+
+  assert.notEqual(result.plan.reason, "low_risk_generic_followup");
+  assert.equal(result.plan.shouldQueueReply, false);
+  assert.equal(result.sendTask, null);
+  assert.equal(result.manualLock.conversation.manualLocked, true);
+  assert.equal(store.listSendTasks({ conversationId: "conversation_demo_1" }).length, 0);
+});
+
 test("high-value gift inquiry receives a safe acknowledgement without locking the conversation", async () => {
   let calls = 0;
   const ai = { generateInboundSuggestion: async () => { calls += 1; throw new Error("must not run"); } };
@@ -616,19 +883,52 @@ test("high-value follow-up inherits prior budget and asks only for the next miss
   assert.doesNotMatch(result.sendTask.payload.text, /预算|数量|我已经记下|再确认三个信息/);
 });
 
-test("provider failure keeps the rule draft for review but blocks unpolished auto-send", async () => {
+test("provider failure sends the governed rule fallback instead of leaving the customer unanswered", async () => {
   const ai = { generateInboundSuggestion: async () => { throw new Error("provider unavailable"); } };
   const { service } = setup(ai);
   const result = await service.processInboundMessage({ externalId: "ai-suggestion-provider-fallback", wechatAccountId: "wechat_demo_1", conversationId: "conversation_demo_1", customerId: "customer_demo_1", text: "物流快递单号 456 已停滞两天，请帮我查物流进度" });
   assert.equal(result.route.replyDraft.aiAssistance.used, false);
   assert.equal(result.route.replyDraft.aiAssistance.authority, "rule_fallback");
   assert.equal(result.route.suggestedReply, result.route.replyDraft.ruleSuggestedReply);
-  assert.equal(result.plan.shouldQueueReply, false);
-  assert.equal(result.plan.shouldNotifyHuman, true);
-  assert.equal(result.plan.aiPolishRequired, true);
-  assert.match(result.plan.reason, /^ai_polish_required:/);
-  assert.equal(result.sendTask, null);
-  assert.ok(result.notification);
+  assert.equal(result.plan.shouldQueueReply, true);
+  assert.equal(result.plan.aiFallbackUsed, true);
+  assert.equal(result.plan.aiFallbackReason, "provider_unavailable_or_unsafe");
+  assert.equal(result.sendTask.status, "queued");
+  assert.equal(result.sendTask.payload.text, result.route.replyDraft.ruleSuggestedReply);
+});
+
+test("a handled inbound service action still receives one identity-bound no-intercept acknowledgement", async () => {
+  const { store, service } = setup(undefined);
+  const payload = {
+    externalId: "handled-service-action-no-intercept-ack",
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+    text: "我已经按提示操作了",
+    handledServiceAction: {
+      type: "customer_upgrade_qr_queued",
+      referenceId: "upgrade-no-intercept-1",
+    },
+  };
+
+  const result = await service.processInboundMessage(payload);
+
+  assert.equal(result.plan.type, "service_action_queued");
+  assert.equal(result.plan.shouldQueueReply, true);
+  assert.equal(result.plan.acknowledgementOnly, true);
+  assert.equal(result.plan.noInterceptFallback, true);
+  assert.equal(result.sendTask.status, "queued");
+  assert.equal(result.sendTask.wechatAccountId, payload.wechatAccountId);
+  assert.equal(result.sendTask.conversationId, payload.conversationId);
+  assert.equal(result.sendTask.customerId, payload.customerId);
+  assert.equal(result.sendTask.payload.replyDraftSource, "never_silent_acknowledgement");
+  assert.match(result.sendTask.payload.text, /收到您的消息/);
+  assert.equal(store.listSendTasks({ conversationId: payload.conversationId }).length, 1);
+
+  const replay = await service.processInboundMessage(payload);
+  assert.equal(replay.duplicate, true);
+  assert.equal(replay.sendTask.id, result.sendTask.id);
+  assert.equal(store.listSendTasks({ conversationId: payload.conversationId }).length, 1);
 });
 
 test("manual-takeover conversation can request a fresh AI suggestion without sending it", async () => {
@@ -675,6 +975,95 @@ test("manual-takeover conversation can request a fresh AI suggestion without sen
   assert.ok(calls[0].requiredTerms.includes("抱歉"));
   assert.match(calls[0].nextAction, /反感重复模板/);
   assert.equal(suggestion.suggestedReply, "抱歉，前面的回复太重复了；这件事我会交给人工同事核实，确认后给您明确答复。");
+  assert.equal(store.listSendTasks({ conversationId: "conversation_demo_1" }).length, 0);
+});
+
+test("manual reply suggestion falls back to safe rule copy when AI providers fail", async () => {
+  let calls = 0;
+  const ai = {
+    generateInboundSuggestion: async () => {
+      calls += 1;
+      throw new Error("provider unavailable");
+    },
+  };
+  const { store, service } = setup(ai);
+  const inbound = await service.processInboundMessage({
+    externalId: "manual-suggestion-provider-failure",
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+    text: "我要投诉并报警维权",
+  });
+  assert.equal(inbound.manualLock.conversation.manualLocked, true);
+
+  const suggestion = await service.generateConversationReplySuggestion({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+  });
+
+  assert.equal(calls, 1);
+  assert.equal(suggestion.suggestedReply, inbound.route.replyDraft.ruleSuggestedReply);
+  assert.equal(suggestion.ai.provider, "rule_fallback");
+  assert.equal(suggestion.ai.model, "safe_rule_suggestion");
+  assert.equal(suggestion.ai.attempts, 0);
+  assert.equal(store.listSendTasks({ conversationId: "conversation_demo_1" }).length, 0);
+});
+
+test("generic handoff reply suggestion returns the safe rule copy without spending AI", async () => {
+  let calls = 0;
+  const ai = {
+    generateInboundSuggestion: async () => {
+      calls += 1;
+      throw new Error("must not run for generic handoff fallback");
+    },
+  };
+  const { store, service } = setup(ai);
+  const reply = "收到，这个问题我先不直接下结论，会帮您转给人工确认后再回复，保证处理更稳妥。";
+  const message = store.createMessage({
+    externalId: "generic-handoff-suggestion",
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+    text: "可以了吗",
+  });
+  store.createRouteEvaluation(
+    {
+      operationKey: "generic-handoff-suggestion-route",
+      wechatAccountId: "wechat_demo_1",
+      conversationId: "conversation_demo_1",
+      customerId: "customer_demo_1",
+      messageId: message.id,
+      text: "可以了吗",
+    },
+    {
+      agentKey: "general",
+      scene: "未分类",
+      action: "manual_review",
+      confidence: 0.4,
+      suggestedReply: reply,
+      knowledgeMatches: [],
+      appliedSkills: [{ id: "skill_guard", name: "防乱回复" }],
+      replyDraft: {
+        source: "skill_enhanced",
+        nextAction: "handoff_to_human",
+        ruleSuggestedReply: reply,
+        styleProfile: { activeForAgent: false },
+      },
+    },
+  );
+
+  const suggestion = await service.generateConversationReplySuggestion({
+    wechatAccountId: "wechat_demo_1",
+    conversationId: "conversation_demo_1",
+    customerId: "customer_demo_1",
+  });
+
+  assert.equal(calls, 0);
+  assert.equal(suggestion.suggestedReply, reply);
+  assert.equal(suggestion.sourceText, "可以了吗");
+  assert.equal(suggestion.ai.provider, "rule_fallback");
+  assert.equal(suggestion.ai.historyTurns, 0);
   assert.equal(store.listSendTasks({ conversationId: "conversation_demo_1" }).length, 0);
 });
 
@@ -743,9 +1132,10 @@ test("catalog AI output that drops verified facts falls back to the rule reply",
   assert.equal(result.route.suggestedReply, result.route.replyDraft.ruleSuggestedReply);
   assert.match(result.route.suggestedReply, /守护礼盒/);
   assert.match(result.route.suggestedReply, /66/);
-  assert.equal(result.plan.shouldQueueReply, false);
-  assert.equal(result.plan.aiPolishRequired, true);
-  assert.equal(result.sendTask, null);
+  assert.equal(result.plan.shouldQueueReply, true);
+  assert.equal(result.plan.aiFallbackUsed, true);
+  assert.equal(result.sendTask.status, "queued");
+  assert.equal(result.sendTask.payload.text, result.route.replyDraft.ruleSuggestedReply);
 });
 
 test("automatic transactional text is rewritten by AI and keeps verified facts", async () => {

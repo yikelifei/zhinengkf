@@ -2,6 +2,15 @@
 
 const { retrieveKnowledgeRag } = require("./knowledgeRag");
 const {
+  buildCustomerSelectionMaterialReply,
+  buildCustomerSelectionPageReply,
+  buildCustomerSelectionPageQuoteReply,
+  customerMaterialCategoryLabel,
+  selectCustomerSelectionMaterial,
+  selectCustomerSelectionPages,
+  resolveCustomerSelectionPageQuote,
+} = require("./customerSelectionMaterials");
+const {
   buildXiaoshiPreSalesReply,
   buildXiaoshiStyleProfile,
   mergeXiaoshiSkills,
@@ -66,7 +75,29 @@ function buildAgentReplyDraft(route = {}, context = {}) {
     && (!hasApprovedHumanReply || ANSWER_FIRST_INTENTS.has(directCandidate.intent))
     ? directCandidate
     : null;
-  const composedReply = composeReply(route, skills, knowledgeMatches, catalogMatches, catalogRecommendation, directAnswer);
+  const materialRecommendation = selectCustomerSelectionMaterial({
+    text: route.text || "",
+    budget: route.budget || {},
+    salesContext: route.salesContext || {},
+    previousSelection: context.customerSelectionMaterialContext || null,
+  });
+  const pageRecommendation = selectCustomerSelectionPages({
+    text: route.text || "",
+    budget: route.budget || {},
+    salesContext: route.salesContext || {},
+    previousSelection: context.customerSelectionMaterialContext || null,
+  });
+  const pageQuote = resolveCustomerSelectionPageQuote({
+    text: route.text || "",
+    budget: route.budget || {},
+    previousPageRecommendation: context.customerSelectionPageContext || null,
+  });
+  const selectionReply = pageQuote.requested && (pageQuote.status !== "missing_page_context" || !catalogMatches.length)
+    ? buildCustomerSelectionPageQuoteReply(pageQuote)
+    : pageRecommendation.requested
+      ? buildCustomerSelectionPageReply(pageRecommendation)
+      : buildCustomerSelectionMaterialReply(materialRecommendation);
+  const composedReply = composeReply(route, skills, knowledgeMatches, catalogMatches, catalogRecommendation, directAnswer, selectionReply);
   const repetitionGuard = avoidRepeatedReply(route, composedReply, context.previousReplies);
   const suggestedReply = repetitionGuard.reply;
   return {
@@ -110,6 +141,9 @@ function buildAgentReplyDraft(route = {}, context = {}) {
         recommendation: catalogRecommendation,
         finalQuoteRequiresManualReview: true,
       },
+      customerSelectionMaterial: materialRecommendation,
+      customerSelectionPages: pageRecommendation,
+      customerSelectionPageQuote: pageQuote,
     },
   };
 }
@@ -276,6 +310,7 @@ function knowledgeContextForRoute(route = {}) {
   return [
     route?.salesContext?.usageScene,
     route?.salesContext?.stylePreference,
+    route?.salesContext?.customerCategory ? customerMaterialCategoryLabel(route.salesContext.customerCategory) : "",
   ].map((item) => String(item || "").trim()).filter(Boolean).join(" ");
 }
 
@@ -470,7 +505,7 @@ function extractKeywords(text) {
   return [...new Set(keywords)];
 }
 
-function composeReply(route, skills, knowledgeMatches, catalogMatches, catalogRecommendation, directAnswer = null) {
+function composeReply(route, skills, knowledgeMatches, catalogMatches, catalogRecommendation, directAnswer = null, materialReply = "") {
   const budget = route.budget || {};
   const skillNames = new Set(skills.map((skill) => normalizeSkillName(skill.name)));
   const exemplar = knowledgeMatches[0]?.excerpt || "";
@@ -481,6 +516,8 @@ function composeReply(route, skills, knowledgeMatches, catalogMatches, catalogRe
     && !/\[附件\]|\[引用/.test(formatHumanVerbatimReply(item.excerpt || ""))
   ))?.excerpt || "";
   const catalogReply = composeCatalogReply(route, catalogMatches, catalogRecommendation);
+
+  if (materialReply && !(route.riskFlags || []).length) return materialReply;
 
   if (route.action === "manual_review") {
     if (route.isHighValue) {
@@ -766,12 +803,10 @@ function composeCatalogReply(route, catalogMatches = [], recommendation = null) 
   if (recommendation?.items?.length) {
     const visibleItems = recommendation.items.slice(0, 4);
     const items = visibleItems
-      .map((item) => `${item.name || item.skuCode}${item.salePrice ? ` ${formatMoney(item.salePrice)}元` : ""}`)
+      .map((item) => `${item.name || item.skuCode}`)
       .join("＋");
     const remaining = recommendation.items.length - visibleItems.length;
     const itemCount = remaining > 0 ? `等 ${recommendation.items.length} 件` : "";
-    const price = recommendation.totalSalePrice ? `，单份完整组合商品库合计 ${formatMoney(recommendation.totalSalePrice)} 元` : "";
-    const humanPrice = recommendation.totalSalePrice ? `，单份 ${formatMoney(recommendation.totalSalePrice)} 元` : "";
     const stock = quantity
       ? recommendation.enough
         ? `，${quantity} 份库存够的`
@@ -786,9 +821,9 @@ function composeCatalogReply(route, catalogMatches = [], recommendation = null) 
       if (recommendation.status !== "ready" || recommendation.warnings.length) {
         return `好呢，${usageScene}${preference}我记下了。这档预算暂时没配出完整礼盒，我先不拿零散配件凑，给您补一套完整搭配再发哈。`;
       }
-      return `好呢，按${usageScene}${preference}，我先给您搭：${items}${itemCount}${humanPrice}${stock}。您看这套可以吗？`;
+      return `好呢，按${usageScene}${preference}，我先给您搭：${items}${itemCount}${stock}。销售价以对应PPT款式页标价为准；如果更换其中品类，我再按调整后的组合重新报价。您看这套可以吗？`;
     }
-    return `按您提供的预算，当前商品库可先参考：${items}${itemCount}${price}${stock}。`;
+    return `按您提供的预算，当前可先参考这套搭配：${items}${itemCount}${stock}。销售价以对应PPT款式页标价为准；更换品类后再重新核算。`;
   }
   const matched = catalogMatches[0];
   if (!matched) return "";
@@ -798,14 +833,14 @@ function composeCatalogReply(route, catalogMatches = [], recommendation = null) 
       : `，当前库存 ${matched.stock} 件，距离 ${quantity} 件还差 ${quantity - matched.stock} 件`
     : `，当前登记库存 ${matched.stock} 件`;
   const leadTime = matched.leadTimeDays ? `，常规备货约 ${matched.leadTimeDays} 天` : "";
-  return `当前商品库中，${matched.name}（${matched.skuCode}）登记单价 ${formatMoney(matched.salePrice)} 元${stock}${leadTime}。`;
+  return `当前商品库中已找到${matched.name}（${matched.skuCode}）${stock}${leadTime}。商品库价格仅用于内部成本核算，对客销售价请按对应PPT页面标价；更换品类时再重新报价。`;
 }
 
 function buildPreSalesReply(route) {
   const quantity = positiveNumberOrNull(route.budget?.quantity);
   const quantityText = quantity ? `我已记录 ${quantity} 件` : "请告诉我需要的数量";
   if (/多少钱|价格|优惠|报价|单价/.test(route.text || "")) {
-    return `可以核价。请把商品名称、SKU 或图片发我，${quantityText}；还需确认收货城市、是否含税/运费以及 Logo 工艺。系统会先按商品库核对，最终阶梯优惠由人工确认。`;
+    return `可以核价。请把对应PPT页面或刚才推荐的第几个告诉我，${quantityText}；原款直接按PPT页面标价，更换其中品类时才按调整后的组合重新计算。`;
   }
   return "可以推荐。请告诉我用途、单份预算、数量、交期，以及是否需要 Logo；我会先从商品库给出可执行搭配，并明确库存与待人工确认项。";
 }

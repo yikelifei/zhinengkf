@@ -57,6 +57,14 @@ function planZhenxiCustomerRequest(input = {}) {
   const currentAssetIds = normalizeList(input.assetIds);
   const availableAssets = normalizeAssets(input.availableAssets, currentAssetIds);
   const previousPlan = normalizePreviousPlan(input.previousPlan, input.existingJobs);
+  if (isCreativeStatusQuery(text)) {
+    return planCreativeStatusReply({
+      text,
+      previousPlan: input.previousPlan,
+      existingJobs: input.existingJobs,
+      requestContextId: String(input.requestContextId || "").trim(),
+    });
+  }
   const textOnly = TEXT_ONLY_REQUEST_PATTERN.test(text);
   const hasNegatedImageRequest = new RegExp(NEGATED_IMAGE_REQUEST_PATTERN.source, "i").test(text);
   const imageIntentText = stripNegatedImageRequests(text);
@@ -154,6 +162,97 @@ function planZhenxiCustomerRequest(input = {}) {
     ratio: detectImageRatio(text),
     replyText: `收到，我正在用臻希 AI 生成${copyCapability(module)}，完成后直接发给您。`,
   };
+}
+
+function isCreativeStatusQuery(value) {
+  const text = String(value || "")
+    .trim()
+    .replace(/[？?！!。，,.\s]/g, "");
+  if (!text) return false;
+  if (/^(?:好了吗|做好了吗|弄好了吗|完成了吗|有结果了吗|出了吗|出来了吗|到哪了|做到哪了|进度怎么样|什么进度|还没好吗|怎么还没好|可以看了吗|可以发了吗)$/.test(text)) {
+    return true;
+  }
+  if (/(?:生成|出图)(?:好|完成|出来)?了吗/.test(text)) return true;
+  return /(?:生成|出图|设计图|效果图|海报|贺卡|吊牌|腰封|图片).{0,8}(?:好了吗|好了没|完成了吗|做完了吗|出来了吗|出了吗|到哪了|什么进度|进度怎么样|还要多久)/.test(text);
+}
+
+function planCreativeStatusReply(input) {
+  const jobs = Array.isArray(input.existingJobs) ? [...input.existingJobs] : [];
+  const previousPlan = input.previousPlan && typeof input.previousPlan === "object"
+    ? input.previousPlan
+    : null;
+  const previousPlanId = String(previousPlan?.planId || "").trim();
+  const relatedJobs = previousPlanId
+    ? jobs.filter((job) => designJobPlanId(job) === previousPlanId)
+    : [];
+  const candidates = (relatedJobs.length ? relatedJobs : jobs)
+    .sort((left, right) => designJobTimestamp(right) - designJobTimestamp(left));
+  const job = candidates[0] || null;
+  const status = String(job?.status || "").trim().toLowerCase();
+  const imageCount = Array.isArray(job?.images) ? job.images.length : 0;
+  const dispatchStatus = String(job?.submitDispatchStatus || "").trim().toLowerCase();
+  const outcomeUnknown = status === "manual_review"
+    && (dispatchStatus === "outcome_unknown" || /结果未知|outcome_unknown|禁止.*重试/i.test(String(job?.errorMessage || "")));
+
+  let replyText;
+  let reason = "zhenxi_status_not_started";
+  let needsHumanReview = false;
+  if (!job) {
+    replyText = previousPlan
+      ? "还没有开始生成。当前仍在等信息或素材补齐；补齐并确认开始后，我才会调用生成接口。"
+      : "当前没有正在生成的设计任务，所以还不能说已经生成好了。需要开始时，请把要做的内容和素材发完整。";
+  } else if (imageCount > 0 || ["completed", "quick_confirm", "customer_selected", "quote_created"].includes(status)) {
+    reason = "zhenxi_status_completed";
+    replyText = imageCount > 0
+      ? `已经生成完成，系统里有 ${imageCount} 张结果；我接着把可用图片发您确认。`
+      : "已经生成完成，结果正在整理，我接着发您确认。";
+  } else if (outcomeUnknown) {
+    reason = "zhenxi_status_outcome_unknown";
+    needsHumanReview = true;
+    replyText = "现在还不能确认生成成功。设计接口已经收到过任务，但返回结果未知；我会先核对是否出图和扣费，暂时不重复生成，避免重复扣费。";
+  } else if (["generating", "submitted", "processing", "polling"].includes(status) || dispatchStatus === "accepted") {
+    reason = "zhenxi_status_generating";
+    replyText = "还在生成中，目前没有拿到完成结果；完成并保存成功后我会直接发您，不会把“已提交”说成“已生成”。";
+  } else if (["draft", "requested", "pending"].includes(status)) {
+    reason = "zhenxi_status_draft";
+    replyText = "还没有开始正式生成，任务目前只是在准备阶段，生成接口尚未确认完成。";
+  } else if (status === "failed") {
+    reason = "zhenxi_status_failed";
+    needsHumanReview = true;
+    replyText = "这次没有生成成功。需要先核对失败原因，再由您确认是否重新生成；我不会直接重复调用接口。";
+  } else if (status === "cancelled") {
+    reason = "zhenxi_status_cancelled";
+    replyText = "这次生成任务已经取消，没有可交付的生成结果。";
+  } else {
+    reason = "zhenxi_status_requires_review";
+    needsHumanReview = true;
+    replyText = "当前任务状态还不能证明已经生成完成，我会先核对真实结果，再给您明确答复。";
+  }
+
+  return {
+    kind: "status",
+    module: "customer_creative",
+    reason,
+    planId: previousPlanId || `customer-creative-status:${input.requestContextId || stablePlanSeed(input.text, ["status"])}`,
+    missingFields: [],
+    designJobId: String(job?.id || ""),
+    designJobStatus: status || "not_started",
+    needsHumanReview,
+    replyText,
+  };
+}
+
+function designJobPlanId(job) {
+  const requirements = job?.requirements && typeof job.requirements === "object" ? job.requirements : {};
+  const customerAgent = requirements.customerAgent && typeof requirements.customerAgent === "object"
+    ? requirements.customerAgent
+    : {};
+  return String(customerAgent.planId || "").trim();
+}
+
+function designJobTimestamp(job) {
+  const value = Date.parse(String(job?.updatedAt || job?.createdAt || ""));
+  return Number.isFinite(value) ? value : 0;
 }
 
 function stripNegatedImageRequests(text) {

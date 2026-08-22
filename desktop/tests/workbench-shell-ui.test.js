@@ -38,7 +38,6 @@ test("default navigation uses four operator-journey groups and only existing pag
   const expectedIds = [
     "overview-center",
     "conversation-center",
-    "wecom-workspace",
     "routing-center",
     "send-center",
     "wechat-channel-center",
@@ -57,6 +56,8 @@ test("default navigation uses four operator-journey groups and only existing pag
   ];
   for (const id of expectedIds) assert.match(navigation, new RegExp(`id: "${id}"`));
 
+  assert.doesNotMatch(navigation, /id: "wecom-workspace"/);
+  assert.match(navigation, /id: "conversation-center"[\s\S]*?WORKBENCH_ROUTES\.wechatWorkWorkspace\.href[\s\S]*?label: "企业微信会话"/);
   assert.doesNotMatch(navigation, /id: "personal-wechat-center"/);
   assert.match(navigation, /id: "sales-center"[\s\S]*?label: "销售管理"/);
   assert.match(navigation, /id: "catalog-center"[\s\S]*?WORKBENCH_ROUTES\.catalogBundles\.href[\s\S]*?label: "AI 搭品"/);
@@ -116,6 +117,9 @@ test("shared CSS uses compact Tencent tokens and a complete 390px mobile bottom-
   assert.match(css, /grid-template-columns:\s*var\(--wk-sidebar-width\) minmax\(0, 1fr\);/);
   assert.match(css, /grid-template-rows:\s*60px minmax\(0, 1fr\);/);
   assert.match(css, /\.mainColumn\[data-has-topbar="false"\]\s*\{\s*grid-template-rows:\s*minmax\(0, 1fr\);/);
+  assert.match(css, /\.shellFrame\s*\{[\s\S]*?overflow:\s*hidden;/);
+  assert.match(css, /\.mainColumn\s*\{[\s\S]*?height:\s*100%;[\s\S]*?overflow:\s*hidden;/);
+  assert.match(css, /\.shellContent\s*\{[\s\S]*?overflow-x:\s*hidden;[\s\S]*?overflow-y:\s*auto;[\s\S]*?scrollbar-gutter:\s*stable;/);
   assert.match(css, /min-height:\s*34px;/);
   assert.doesNotMatch(css, /linear-gradient|radial-gradient/i);
 

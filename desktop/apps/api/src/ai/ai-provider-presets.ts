@@ -3,10 +3,11 @@ import type { AiRoutingTier } from "./ai-provider-config";
 export type AiProviderPreset = Readonly<{
   name: string;
   label: string;
-  region: "china" | "global" | "aggregator";
+  region: "china" | "global" | "aggregator" | "custom";
   apiKeyEnv: string;
   enabledEnv: string;
   modelEnv: string;
+  baseUrlEnv?: string;
   baseUrl: string;
   model: string;
   requestFormat: "openai" | "anthropic";
@@ -36,16 +37,19 @@ export const AI_PROVIDER_PRESETS: readonly AiProviderPreset[] = [
   {
     name: "deepseek", label: "DeepSeek", region: "china", apiKeyEnv: "DEEPSEEK_API_KEY",
     enabledEnv: "AI_PROVIDER_DEEPSEEK_ENABLED", modelEnv: "DEEPSEEK_MODEL",
-    baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat",
+    baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash",
     requestFormat: "openai", apiEndpoint: "/chat/completions", routingTier: "economy",
-    temperature: 0.7, maxTokens: 500, description: "中文理解和复杂业务推理。",
+    visionEnabled: false,
+    temperature: 0.4, maxTokens: 500,
+    description: "仅处理文字客服回复；图片先由视觉模型提取文字后再交给 DeepSeek。",
     docsUrl: "https://api-docs.deepseek.com/",
   },
   {
     name: "dashscope", label: "阿里云百炼 Qwen", region: "china", apiKeyEnv: "DASHSCOPE_API_KEY",
     enabledEnv: "AI_PROVIDER_DASHSCOPE_ENABLED", modelEnv: "DASHSCOPE_MODEL",
-    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen3.5-flash",
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen3.7-flash",
     requestFormat: "openai", apiEndpoint: "/chat/completions", routingTier: "economy",
+    visionEnabled: true, visionModel: "qwen3.7-flash",
     temperature: 0.4, maxTokens: 500, description: "通义千问 OpenAI 兼容接口。",
     docsUrl: "https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope",
   },
@@ -126,10 +130,10 @@ export const AI_PROVIDER_PRESETS: readonly AiProviderPreset[] = [
   {
     name: "gemini", label: "Google Gemini", region: "global", apiKeyEnv: "GEMINI_API_KEY",
     enabledEnv: "AI_PROVIDER_GEMINI_ENABLED", modelEnv: "GEMINI_MODEL",
-    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-3.6-flash",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-3.7-flash",
     requestFormat: "openai", apiEndpoint: "/chat/completions", routingTier: "economy",
-    visionEnabled: true, visionModel: "gemini-3.6-flash",
-    audioInputEnabled: true, audioInputModel: "gemini-3.6-flash",
+    visionEnabled: true, visionModel: "gemini-3.7-flash",
+    audioInputEnabled: true, audioInputModel: "gemini-3.7-flash",
     temperature: 0.4, maxTokens: 600, description: "Gemini 官方 OpenAI 兼容接口。",
     docsUrl: "https://ai.google.dev/gemini-api/docs/openai",
   },
@@ -173,6 +177,24 @@ export const AI_PROVIDER_PRESETS: readonly AiProviderPreset[] = [
     temperature: 0.7, maxTokens: 800, description: "一个密钥路由多个模型厂商。",
     docsUrl: "https://openrouter.ai/docs/quickstart",
   },
+  {
+    name: "geeknow", label: "GeekNow 中转站", region: "aggregator", apiKeyEnv: "GEEKNOW_API_KEY",
+    enabledEnv: "AI_PROVIDER_GEEKNOW_ENABLED", modelEnv: "GEEKNOW_MODEL", baseUrlEnv: "GEEKNOW_BASE_URL",
+    baseUrl: "https://geeknow.ai/v1", model: "gemini-2.5-pro",
+    requestFormat: "openai", apiEndpoint: "/chat/completions", routingTier: "quality",
+    visionEnabled: true, visionModel: "gemini-2.5-pro", audioInputEnabled: true, audioInputModel: "gemini-2.5-pro",
+    temperature: 0.7, maxTokens: 1200,
+    description: "智能客服独立使用的 OpenAI 兼容中转站；密钥、API 地址和模型均单独保存。",
+    docsUrl: "https://geeknow.ai/",
+  },
+  {
+    name: "custom_api_1", label: "自定义 OpenAI 兼容", region: "custom", apiKeyEnv: "CUSTOM_API_KEY",
+    enabledEnv: "AI_PROVIDER_CUSTOM_API_1_ENABLED", modelEnv: "CUSTOM_API_MODEL", baseUrlEnv: "CUSTOM_API_BASE",
+    baseUrl: "", model: "",
+    requestFormat: "openai", apiEndpoint: "/chat/completions", routingTier: "quality",
+    temperature: 0.7, maxTokens: 800, description: "接入自建网关或其他 OpenAI 兼容服务。",
+    docsUrl: "",
+  },
 ] as const;
 
 const PRESET_BY_NAME = new Map(AI_PROVIDER_PRESETS.map((preset) => [preset.name, preset]));
@@ -181,11 +203,15 @@ export function getAiProviderPreset(name: unknown) {
   return PRESET_BY_NAME.get(String(name || "").trim());
 }
 
+export function providerBaseUrlEnv(preset: AiProviderPreset) {
+  return preset.baseUrlEnv || preset.apiKeyEnv.replace(/_API_KEY$/, "_BASE_URL");
+}
+
 export function presetAsRawConfig(preset: AiProviderPreset) {
   return {
     enabled: false,
     api_key: `\${${preset.apiKeyEnv}}`,
-    base_url: preset.baseUrl,
+    base_url: `\${${providerBaseUrlEnv(preset)}:-${preset.baseUrl}}`,
     model: `\${${preset.modelEnv}:-${preset.model}}`,
     request_format: preset.requestFormat,
     api_endpoint: preset.apiEndpoint,

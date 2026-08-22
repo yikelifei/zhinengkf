@@ -1,12 +1,13 @@
 import type { IdentityFilters, SendAdapterInfo, SendTask } from "../../lib/api";
 
+const BUSINESS_RISK_CONTROLS_DISABLED = true;
+
 export function isManualLocked(task: SendTask) {
-  const manualLocked = Boolean(
+  return Boolean(
     task.conversation?.manualLocked ||
     task.guardSnapshot?.blockedByManualLock ||
     task.guardSnapshot?.blockedBy === "manual_lock",
   );
-  return manualLocked;
 }
 
 export function isManualReplySendTask(task: SendTask) {
@@ -18,7 +19,11 @@ export function isManualReplySendTask(task: SendTask) {
 }
 
 function isManualLockBlocking(task: SendTask) {
-  return isManualLocked(task) && !isManualReplySendTask(task);
+  return !BUSINESS_RISK_CONTROLS_DISABLED && Boolean(task.conversation?.manualLocked) && !isManualReplySendTask(task);
+}
+
+function isRoutingPolicyBlocking(task: SendTask) {
+  return !BUSINESS_RISK_CONTROLS_DISABLED && Boolean(task.guardSnapshot?.blockedByRoutingPolicy);
 }
 
 export function hasUnknownDelivery(task: SendTask) {
@@ -45,13 +50,13 @@ export function canExecuteSendTask(task: SendTask, adapter: SendAdapterInfo | nu
   if (!adapter?.realSend) return false;
   if (task.status === "sending" || ["sent", "cancelled", "uncertain"].includes(task.status)) return false;
   if (task.status !== "queued") return false;
-  if (isManualLockBlocking(task) || task.guardSnapshot?.blockedByRoutingPolicy || hasUnknownDelivery(task)) return false;
+  if (isManualLockBlocking(task) || isRoutingPolicyBlocking(task) || hasUnknownDelivery(task)) return false;
   return task.guardSnapshot?.status === "passed";
 }
 
 export function canRequeueSendTask(task: SendTask) {
   if (!["blocked", "failed", "dry_run"].includes(task.status)) return false;
-  if (isManualLockBlocking(task) || task.guardSnapshot?.blockedByRoutingPolicy || hasUnknownDelivery(task)) return false;
+  if (isManualLockBlocking(task) || isRoutingPolicyBlocking(task) || hasUnknownDelivery(task)) return false;
   return true;
 }
 
@@ -113,8 +118,8 @@ export function scopedIdentityHref(basePath: string, identity: IdentityFilters) 
 export function operationBlockReason(task: SendTask, adapter?: SendAdapterInfo | null) {
   if (hasUnknownDelivery(task)) return "投递状态不确定，禁止自动重试、取消或再次执行；请先核对官方记录或客户会话。";
   if (task.status === "sending") return "任务正在等待发送回执，禁止重复执行。";
-  if (isManualLockBlocking(task)) return "会话已被人工接管，必须先在会话页完成人工处理。";
-  if (task.guardSnapshot?.blockedByRoutingPolicy) return "路由策略要求人工处理，不能从发送页绕过。";
+  if (isManualLockBlocking(task)) return "当前会话仍带旧人工锁，必须先刷新或解除该锁后再操作。";
+  if (isRoutingPolicyBlocking(task)) return "路由策略要求人工处理，不能从发送页绕过。";
   if (adapter && !adapter.realSend) return "真实发送适配器未就绪，本页不会退回演练发送。";
   if (task.guardSnapshot?.status !== "passed") return "必须先基于当前真实窗口完成账号、会话和客户校验。";
   return "当前任务状态不允许执行该操作。";

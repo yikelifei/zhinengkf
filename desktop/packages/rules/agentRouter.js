@@ -3,6 +3,7 @@
 const { classifyScene } = require("./chatTraining");
 const { isHighValueBudget, mergeBudgetContext, parseBudget } = require("./budget");
 const { buildBasicCustomerServiceScene, classifyBasicCustomerServiceQuestion } = require("./basicCustomerService");
+const { classifyCustomerMaterialCategory, normalizeCustomerMaterialCategory } = require("./customerSelectionMaterials");
 
 const SENSITIVE_PATTERNS = [
   /投诉/,
@@ -65,6 +66,7 @@ function evaluateAgentRoute(input = {}, options = {}) {
   const parsedBudget = shouldParseBudgetForRoute(text, scene.agentKey) ? parseBudget(text) : null;
   const currentUsageScene = extractSalesUsageScene(text);
   const currentStylePreference = extractSalesStylePreference(text);
+  const currentCustomerCategory = classifyCustomerMaterialCategory(text);
   const priorUsageScene = normalizeUsageContext(input.usageContext || options.usageContext || priorSalesContext);
   const usageChanged = Boolean(currentUsageScene && priorUsageScene && currentUsageScene !== priorUsageScene);
   const budgetContext = usageChanged
@@ -74,9 +76,12 @@ function evaluateAgentRoute(input = {}, options = {}) {
   const usageScene = currentUsageScene || priorUsageScene;
   const stylePreference = currentStylePreference
     || (usageChanged ? null : normalizeStylePreference(input.styleContext || options.styleContext || priorSalesContext));
+  const customerCategory = currentCustomerCategory
+    || (usageChanged ? null : normalizeCustomerMaterialCategory(priorSalesContext.customerCategory));
   const salesContext = {
     usageScene: usageScene || null,
     stylePreference: stylePreference || null,
+    customerCategory: customerCategory || null,
     contextReset: usageChanged ? "usage_scene_changed" : null,
     currentFields: [...new Set([
       followupResolution?.requestedField,
@@ -84,6 +89,7 @@ function evaluateAgentRoute(input = {}, options = {}) {
       Number(parsedBudget?.perUnitAmount || parsedBudget?.totalAmount || 0) > 0 ? "budget" : null,
       currentUsageScene ? "usage_scene" : null,
       currentStylePreference ? "style_preference" : null,
+      currentCustomerCategory ? "customer_category" : null,
     ].filter(Boolean))],
     currentField: followupResolution?.requestedField
       || (currentUsageScene ? "usage_scene" : null)
@@ -179,8 +185,9 @@ function applySalesConversationContinuity(scene, text, priorSalesContext) {
   }
   const usageScene = normalizeUsageContext(priorSalesContext);
   const stylePreference = normalizeStylePreference(priorSalesContext);
-  if (!usageScene && !stylePreference) return scene;
-  if (!/还有别的|还有其他|其他款|换一个|换一款|换款|再看看其他|再看别的|这个不喜欢|不太喜欢|简单一点|简约一点|实用一点|氛围感一点|商务一点|大气一点|高级一点|这个呢|哪个好/.test(String(text || ""))) {
+  const customerCategory = normalizeCustomerMaterialCategory(priorSalesContext.customerCategory);
+  if (!usageScene && !stylePreference && !customerCategory) return scene;
+  if (!/还有别的|还有其他|其他款|换一个|换一款|换款|再看看其他|再看别的|这个不喜欢|不太喜欢|简单一点|简约一点|实用一点|氛围感一点|商务一点|大气一点|高级一点|这个呢|哪个好|哪款|推荐|帮我挑|帮我选|挑几个|选几款|发几页|发几张/.test(String(text || ""))) {
     return scene;
   }
   const marker = "conversation:sales_followup";
@@ -195,6 +202,7 @@ function applySalesConversationContinuity(scene, text, priorSalesContext) {
       source: "sales_context",
       usageScene: usageScene || null,
       stylePreference: stylePreference || null,
+      customerCategory: customerCategory || null,
     },
   };
 }

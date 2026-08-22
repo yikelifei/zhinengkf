@@ -1,4 +1,4 @@
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient, SendAttemptStatus } from "@prisma/client";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -20,6 +20,18 @@ function rows(data: any, key: string) {
   return Array.isArray(data?.[key]) ? data[key] : [];
 }
 
+function normalizeSendAttemptStatus(value: unknown): SendAttemptStatus {
+  const normalized = String(value || "started").trim();
+  if (Object.prototype.hasOwnProperty.call(SendAttemptStatus, normalized)) {
+    return SendAttemptStatus[normalized as keyof typeof SendAttemptStatus];
+  }
+  // Older local JSON used `cancelled` for an attempt stopped before a durable
+  // outcome. The Prisma task retains cancelled; the attempt records it as a
+  // blocked terminal attempt and preserves the original value in metadata.
+  if (normalized === "cancelled") return SendAttemptStatus.blocked;
+  return SendAttemptStatus.failed;
+}
+
 async function batch(actions: Array<Prisma.PrismaPromise<unknown>>, size = 100) {
   for (let index = 0; index < actions.length; index += size) {
     await prisma.$transaction(actions.slice(index, index + size));
@@ -35,10 +47,17 @@ async function main() {
     conversations: rows(data, "conversations").length,
     messages: rows(data, "messages").length,
     wechatWindowSnapshots: rows(data, "wechatWindowSnapshots").length,
+    designJobs: rows(data, "designJobs").length,
+    designImages: rows(data, "designImages").length,
+    quoteDrafts: rows(data, "quoteDrafts").length,
     sendTasks: rows(data, "sendTasks").length,
     sendAttempts: rows(data, "sendAttempts").length,
+    normalizedCancelledSendAttempts: rows(data, "sendAttempts").filter((item: any) => item.status === "cancelled").length,
     wechatWorkBindings: rows(data, "wechatWorkBindings").length,
     wechatWorkAuditLogs: rows(data, "wechatWorkAuditLogs").length,
+    normalizedStructuredAuditEvents: rows(data, "wechatWorkAuditLogs").filter((item: any) =>
+      item.event && typeof item.event === "object",
+    ).length,
   };
   console.log(JSON.stringify({ sourcePath, dryRun, summary }, null, 2));
   if (dryRun) return;
@@ -49,6 +68,8 @@ async function main() {
       id: item.id,
       displayName: item.displayName || item.alias || item.id,
       alias: item.alias || null,
+      personalWechatOwnerWxId: item.personalWechatOwnerWxId || item.personalWechatRpa?.ownerWxId || null,
+      personalWechatAccountNickname: item.personalWechatAccountNickname || item.personalWechatRpa?.accountNickname || null,
       windowHandle: item.windowHandle || null,
       processId: Number.isInteger(Number(item.processId)) ? Number(item.processId) : null,
       isActive: item.isActive !== false,
@@ -59,6 +80,8 @@ async function main() {
     update: {
       displayName: item.displayName || item.alias || item.id,
       alias: item.alias || null,
+      personalWechatOwnerWxId: item.personalWechatOwnerWxId || item.personalWechatRpa?.ownerWxId || null,
+      personalWechatAccountNickname: item.personalWechatAccountNickname || item.personalWechatRpa?.accountNickname || null,
       windowHandle: item.windowHandle || null,
       processId: Number.isInteger(Number(item.processId)) ? Number(item.processId) : null,
       isActive: item.isActive !== false,
@@ -71,7 +94,9 @@ async function main() {
     create: {
       id: item.id,
       name: item.name || item.wechatId || item.id,
+      avatarUrl: item.avatarUrl || null,
       wechatId: item.wechatId || null,
+      personalWechatRpaBindingKey: item.personalWechatRpaBindingKey || null,
       phone: item.phone || null,
       tags: json(item.tags || []),
       notes: item.notes || null,
@@ -81,7 +106,9 @@ async function main() {
     },
     update: {
       name: item.name || item.wechatId || item.id,
+      avatarUrl: item.avatarUrl || null,
       wechatId: item.wechatId || null,
+      personalWechatRpaBindingKey: item.personalWechatRpaBindingKey || null,
       phone: item.phone || null,
       tags: json(item.tags || []),
       notes: item.notes || null,
@@ -100,6 +127,11 @@ async function main() {
       wechatAccountId: item.wechatAccountId || null,
       lastMessageAt: asDate(item.lastMessageAt),
       manualLocked: Boolean(item.manualLocked),
+      assignee: item.assignee || null,
+      priority: item.priority || "normal",
+      status: item.status || "open",
+      slaDueAt: asDate(item.slaDueAt),
+      firstResponseDueAt: asDate(item.firstResponseDueAt),
       createdAt: asDate(item.createdAt),
       updatedAt: asDate(item.updatedAt),
     },
@@ -111,6 +143,11 @@ async function main() {
       wechatAccountId: item.wechatAccountId || null,
       lastMessageAt: asDate(item.lastMessageAt),
       manualLocked: Boolean(item.manualLocked),
+      assignee: item.assignee || null,
+      priority: item.priority || "normal",
+      status: item.status || "open",
+      slaDueAt: asDate(item.slaDueAt),
+      firstResponseDueAt: asDate(item.firstResponseDueAt),
     },
   })));
 
@@ -145,6 +182,7 @@ async function main() {
       attachments: json(item.attachments || []),
       metadata: json(item.metadata || {}),
       externalId: item.externalId || null,
+      readAt: asDate(item.readAt),
       createdAt: asDate(item.createdAt),
     },
     update: {
@@ -153,6 +191,7 @@ async function main() {
       attachments: json(item.attachments || []),
       metadata: json(item.metadata || {}),
       externalId: item.externalId || null,
+      readAt: asDate(item.readAt),
     },
   })));
 
@@ -189,6 +228,97 @@ async function main() {
     });
   }));
 
+  // Send tasks may retain durable links to design and quote records. Import those
+  // dependencies first so PostgreSQL foreign keys reject neither valid history nor
+  // a safe rerun after a partially completed import.
+  await batch(rows(data, "designJobs").map((item: any) => {
+    const values = {
+      requestId: item.requestId || item.id,
+      externalJobId: item.externalJobId || null,
+      status: item.status || "draft",
+      designType: item.designType || "bundle_render",
+      renderStyle: item.renderStyle || "真实产品摆拍",
+      outputCount: Number(item.outputCount || 6),
+      budget: json(item.budget || {}),
+      bundle: json(item.bundle || {}),
+      requirements: json(item.requirements || {}),
+      customerText: item.customerText || null,
+      scene: item.scene || null,
+      isHighValue: Boolean(item.isHighValue),
+      manualQcRequired: item.manualQcRequired !== false,
+      retryCount: Number(item.retryCount || 0),
+      revisionCount: Number(item.revisionCount || 0),
+      revisionPolicy: item.revisionPolicy === undefined ? undefined : json(item.revisionPolicy),
+      errorMessage: item.errorMessage || null,
+      waitMessageSentAt: asDate(item.waitMessageSentAt),
+      submitOperationKey: item.submitOperationKey || null,
+      submitRequestFingerprint: item.submitRequestFingerprint || null,
+      submitOperationIdentity: item.submitOperationIdentity === undefined ? undefined : json(item.submitOperationIdentity),
+      submitDispatchStatus: item.submitDispatchStatus || null,
+      submitDispatchError: item.submitDispatchError || null,
+      callbackOperationKey: item.callbackOperationKey || null,
+      callbackRequestFingerprint: item.callbackRequestFingerprint || null,
+      callbackStatus: item.callbackStatus || null,
+      callbackClaimedAt: asDate(item.callbackClaimedAt),
+      callbackSettledAt: asDate(item.callbackSettledAt),
+      submittedAt: asDate(item.submittedAt),
+      completedAt: asDate(item.completedAt),
+      customerId: item.customerId,
+      conversationId: item.conversationId,
+      wechatAccountId: item.wechatAccountId || null,
+      orderId: item.orderId || null,
+    };
+    return prisma.designJob.upsert({
+      where: { id: item.id },
+      create: { id: item.id, ...values, createdAt: asDate(item.createdAt), updatedAt: asDate(item.updatedAt) },
+      update: values,
+    });
+  }));
+
+  await batch(rows(data, "designImages").map((item: any) => {
+    const values = {
+      imageId: item.imageId || item.id,
+      designJobId: item.designJobId,
+      position: Number(item.position || 0),
+      downloadUrl: item.downloadUrl || null,
+      localPath: item.localPath || null,
+      width: item.width === undefined || item.width === null ? null : Number(item.width),
+      height: item.height === undefined || item.height === null ? null : Number(item.height),
+      fingerprint: item.fingerprint || null,
+      legacyIdentityHash: item.legacyIdentityHash || null,
+      selected: Boolean(item.selected),
+      customerFeedback: item.customerFeedback || null,
+    };
+    return prisma.designImageCandidate.upsert({
+      where: { id: item.id },
+      create: { id: item.id, ...values, createdAt: asDate(item.createdAt) },
+      update: values,
+    });
+  }));
+
+  await batch(rows(data, "quoteDrafts").map((item: any) => {
+    const values = {
+      designJobId: item.designJobId,
+      customerId: item.customerId,
+      selectedImageId: item.selectedImageId || null,
+      quantity: Number(item.quantity || 0),
+      unitPrice: new Prisma.Decimal(item.unitPrice || 0),
+      totalPrice: new Prisma.Decimal(item.totalPrice || 0),
+      totalCost: new Prisma.Decimal(item.totalCost || 0),
+      profit: new Prisma.Decimal(item.profit || 0),
+      status: item.status || "draft",
+      paymentStatus: item.paymentStatus || "unpaid",
+      sendTaskId: item.sendTaskId || null,
+      customerNotes: item.customerNotes || null,
+      owner: item.owner || null,
+    };
+    return prisma.quoteDraft.upsert({
+      where: { id: item.id },
+      create: { id: item.id, ...values, createdAt: asDate(item.createdAt), updatedAt: asDate(item.updatedAt) },
+      update: values,
+    });
+  }));
+
   await batch(rows(data, "sendTasks").map((item: any) => {
     const values = {
       status: item.status || "queued",
@@ -210,15 +340,20 @@ async function main() {
   }));
 
   await batch(rows(data, "sendAttempts").map((item: any) => {
+    const originalStatus = String(item.status || "started").trim();
+    const importedMetadata = {
+      ...(item.metadata && typeof item.metadata === "object" && !Array.isArray(item.metadata) ? item.metadata : {}),
+      ...(originalStatus === "cancelled" ? { localImportOriginalStatus: originalStatus } : {}),
+    };
     const values = {
       sendTaskId: item.sendTaskId,
       adapter: item.adapter || "dry_run",
-      status: item.status || "started",
+      status: normalizeSendAttemptStatus(originalStatus),
       guardStatus: item.guardStatus || null,
       windowSnapshotId: item.windowSnapshotId || null,
       payloadSummary: json(item.payloadSummary || {}),
       errorMessage: item.errorMessage || null,
-      metadata: json(item.metadata || {}),
+      metadata: json(importedMetadata),
       startedAt: asDate(item.startedAt) || new Date(),
       completedAt: asDate(item.completedAt) || null,
     };
@@ -235,13 +370,19 @@ async function main() {
     "errorMessage", "createdAt",
   ]);
   await batch(rows(data, "wechatWorkAuditLogs").map((item: any) => {
-    const metadata = Object.fromEntries(Object.entries(item).filter(([key]) => !auditScalarKeys.has(key)));
+    const structuredEvent = item.event && typeof item.event === "object" ? item.event : null;
+    const metadata = {
+      ...Object.fromEntries(Object.entries(item).filter(([key]) => !auditScalarKeys.has(key))),
+      ...(structuredEvent ? { localImportStructuredEvent: structuredEvent } : {}),
+    };
     const values = {
       action: item.action || "unknown",
       status: item.status || "unknown",
       msgid: item.msgid || null,
       callbackId: item.callbackId || null,
-      event: item.event || null,
+      event: typeof item.event === "string"
+        ? item.event
+        : structuredEvent?.event_type || structuredEvent?.eventType || item.eventType || null,
       openKfid: item.openKfid || null,
       externalUserId: item.externalUserId || null,
       wechatAccountId: item.wechatAccountId || null,

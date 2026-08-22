@@ -193,6 +193,13 @@ function runNextBuild() {
   if (result.status === 0) waitForBuildOutputReady(60);
   buildDiagnostic("after next build command");
   if (result.status === 0 && !hasNextBuildErrorOutput(result) && !webBuildIsStale() && standaloneServerExists()) return;
+  if (result.status !== 0 && isRetryableNextBuildOutputRace(result)) {
+    waitForBuildOutputReady(60);
+    if (productionBuildReady() && !webBuildIsStale() && standaloneServerExists()) {
+      console.log("[warn] Next reported a transient build-output race, but final production output is complete; continuing.");
+      return;
+    }
+  }
   if (result.status !== 0 && !isRetryableNextBuildRace(result) && !hasNextBuildErrorOutput(result)) process.exit(result.status || 1);
   console.log("[warn] Next build failed or exited before standalone output was complete; retrying once with a clean build state.");
   terminateProjectNextBuildPids();
@@ -205,6 +212,13 @@ function runNextBuild() {
   if (retry.status === 0) waitForBuildOutputReady(60);
   buildDiagnostic("after next build retry command");
   if (retry.status === 0 && !hasNextBuildErrorOutput(retry) && !webBuildIsStale() && standaloneServerExists()) return;
+  if (retry.status !== 0 && isRetryableNextBuildOutputRace(retry)) {
+    waitForBuildOutputReady(60);
+    if (productionBuildReady() && !webBuildIsStale() && standaloneServerExists()) {
+      console.log("[warn] Next retry reported a transient build-output race, but final production output is complete; continuing.");
+      return;
+    }
+  }
   if (retry.status === 0 && !hasNextBuildErrorOutput(retry) && productionBuildReady() && !webBuildIsStale()) {
     console.error("[build] Next completed without standalone output; refusing to synthesize a source-bound server wrapper.");
   }
@@ -312,7 +326,7 @@ function waitForProjectNextBuildPidsToExit(timeoutSeconds = 60) {
 function waitForBuildOutputReady(timeoutSeconds = 60) {
   const attempts = Math.max(1, Math.round(Number(timeoutSeconds || 60) * 2));
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (standaloneServerExists()) return;
+    if (standaloneServerExists() && productionBuildReady()) return;
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
   }
 }
@@ -383,12 +397,23 @@ function isRetryableNextBuildRace(result) {
   const output = `${result.stdout || ""}\n${result.stderr || ""}`;
   if (result.status === 0) return !standaloneServerExists();
   if (/Another next build process is already running/.test(output)) return true;
-  if ((fs.existsSync(nextLockFile) && !findProjectNextBuildPids().length) || !standaloneServerExists()) return true;
-  return (
-    /(ENOENT|MODULE_NOT_FOUND|Cannot find module)/.test(output) &&
-    /\.next/.test(output) &&
-    /(manifest|_ssgManifest|\.nft\.json|diagnostics[\\\/]build-diagnostics\.json|lock)/.test(output)
-  );
+  if (fs.existsSync(nextLockFile) && !findProjectNextBuildPids().length) return true;
+  return isRetryableNextBuildOutputRace(result);
+}
+
+function isRetryableNextBuildOutputRace(result) {
+  const output = `${result.stdout || ""}\n${result.stderr || ""}`;
+  if (result.status === 0) return false;
+  if (hasDefinitiveNextBuildFailure(output)) return false;
+  return /Build error occurred/i.test(output) &&
+    /ENOENT/i.test(output) &&
+    /copyfile/i.test(output) &&
+    /\.next[\\\/]routes-manifest\.json/i.test(output) &&
+    /\.next[\\\/]standalone[\\\/]apps[\\\/]web[\\\/]\.next[\\\/]routes-manifest\.json/i.test(output);
+}
+
+function hasDefinitiveNextBuildFailure(output) {
+  return /(Failed to compile|Type error|TypeScript error|SyntaxError|ESLint|Module parse failed|Cannot resolve|Build failed because of webpack errors)/i.test(output);
 }
 
 function hasNextBuildErrorOutput(result) {

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { DesignPlatformCandidateProbeResponse, DesignPlatformConfigResponse, DesignPlatformHealth, DesignPlatformReadiness, DesignPlatformSmokeTestResult } from "../../lib/api";
 import { getDesignPlatformCandidates, getDesignPlatformConfig, getDesignPlatformHealth, getDesignPlatformReadiness, runDesignPlatformSmokeTest, updateDesignPlatformConfig } from "./api";
 import { createDesignRequestGuard, runGuardedDesignRequest } from "./design-request-guard";
+import { DesignInternalConnectionStatus, isInternalWorkspaceReadiness } from "./design-internal-connection-status";
 import { settingsSaveIntent, type DesignSettingsSaveIntent } from "./design-settings-model";
 import { DesignSettingsStatusPanel } from "./design-settings-status-panel";
 import styles from "./design-pages.module.css";
@@ -201,16 +202,28 @@ export function DesignSettingsPage() {
   const isZhenxiExternal = activeAdapter === "zhenxi_external";
   const isZhenxiDurable = isArtImageLocal || isZhenxiExternal;
   const smokeDisabled = controlsDisabled || !readinessLoaded || !readiness?.ok || isZhenxiDurable;
+  const internalWorkspace = isInternalWorkspaceReadiness(readiness);
 
   return (
     <section className={styles.page} aria-label="设计平台设置">
-      <DesignPageHeader eyebrow="设计平台" title="连接设置" detail="只负责配置、健康检查和正式链路联通测试。" actions={<>
+      <DesignPageHeader
+        eyebrow="臻希 AI"
+        title={internalWorkspace ? "连接状态" : "连接设置"}
+        detail={internalWorkspace ? "内置模式会自动复用本机工作台，不需要重复登录、激活或填写密钥。" : "只负责配置、健康检查和正式链路联通测试。"}
+        actions={<>
         <button type="button" data-action-id="design-settings-refresh" aria-label="刷新设计平台状态" disabled={controlsDisabled} onClick={() => void refresh()}><RefreshCw size={16} aria-hidden="true" />刷新</button>
-        <button type="button" data-action-id="design-settings-smoke" aria-label="运行设计平台联通测试" title={isZhenxiDurable ? "臻希 AI 真实生成模式不会用设置页联通测试消耗额度；请通过正式设计任务触发出图。" : undefined} disabled={smokeDisabled} onClick={() => void runSmoke()}><FlaskConical size={16} aria-hidden="true" />{isZhenxiDurable ? "生成保护" : "联通测试"}</button>
-      </>} />
+        {!internalWorkspace ? <button type="button" data-action-id="design-settings-smoke" aria-label="运行设计平台联通测试" title={isZhenxiDurable ? "臻希 AI 真实生成模式不会用设置页联通测试消耗额度；请通过正式设计任务触发出图。" : undefined} disabled={smokeDisabled} onClick={() => void runSmoke()}><FlaskConical size={16} aria-hidden="true" />{isZhenxiDurable ? "生成保护" : "联通测试"}</button> : null}
+      </>}
+      />
       {error ? <DesignNotice tone="danger">{error}</DesignNotice> : null}
       {notice ? <DesignNotice tone="success">{notice}</DesignNotice> : null}
-      {busy === "refresh" && !configLoaded && !healthLoaded && !readinessLoaded && !candidatesLoaded ? <DesignEmpty title="正在读取设计平台配置" detail="健康、就绪、候选端口与配置状态并行读取。" busy /> : (
+      {busy === "refresh" && !configLoaded && !healthLoaded && !readinessLoaded && !candidatesLoaded ? <DesignEmpty title="正在检测臻希 AI" detail="正在确认内置服务和正式出图能力。" busy /> : internalWorkspace && readiness ? (
+        <DesignInternalConnectionStatus
+          health={health}
+          readiness={readiness}
+          recommendedBaseUrl={candidates?.recommendedBaseUrl || ""}
+        />
+      ) : (
         <div className={styles.twoColumn}>
           <div className={styles.stack}>
             <form className={styles.card} onSubmit={(event) => { event.preventDefault(); requestConfigurationSave(); }}>

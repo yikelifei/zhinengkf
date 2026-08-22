@@ -116,16 +116,26 @@ test("Next catch-all proxy injects proof server-side, strips spoofed proof, and 
   const apiClient = read("apps/web/src/lib/api.ts");
   assert.match(route, /import "server-only"/);
   assert.match(route, /process\.env\.INTERNAL_API_TOKEN/);
-  assert.match(route, /buildDesktopApiUpstreamHeaders\(request\.headers, token, INTERNAL_API_TOKEN_HEADER\)/);
+  assert.match(route, /SMART_KEFU_CLOUD_API_BASE_URL/);
+  assert.match(route, /SMART_KEFU_CLOUD_API_TOKEN/);
+  assert.match(route, /buildDesktopApiUpstreamHeaders\(request\.headers, upstreamTarget\.token, INTERNAL_API_TOKEN_HEADER\)/);
   const proofHelper = read("apps/web/src/lib/desktop-session-proof.ts");
   assert.match(proofHelper, /headers\.delete\("cookie"\)/);
+  assert.match(proofHelper, /"origin"/);
+  assert.match(proofHelper, /"referer"/);
   assert.match(proofHelper, /headers\.delete\(internalApiTokenHeader\);\s*headers\.delete\(READINESS_CHALLENGE_HEADER\);\s*headers\.set\(internalApiTokenHeader, internalApiToken\);/);
   assert.match(route, /http:\/\/127\.0\.0\.1:\$\{apiPort\}/);
+  assert.match(route, /resolveApiUpstreamTarget\(canonicalPath\.path, requestUrl\.search, isReadinessHealth, method\)/);
+  assert.match(route, /forceLocal/);
+  assert.match(route, /isCloudManagedAiProviderPath\(method, pathname\)/);
+  assert.match(route, /"cloud_api_route_not_allowed"/);
+  assert.doesNotMatch(route, /credential\)\s*return true|server-env\)\s*return true|billing-credential\)\s*return true/);
+  assert.match(route, /"cloud_api_session_unavailable"/);
   assert.match(route, /export const POST = proxyDesktopApi/);
   assert.match(route, /advertisedBodyExceedsLimit\(request\.headers\.get\("content-length"\)\)/);
   assert.match(route, /body\.byteLength > MAX_DESKTOP_API_JSON_BODY_BYTES/);
   assert.match(route, /jsonError\(413, "desktop_api_body_too_large"/);
-  assert.doesNotMatch(route, /NEXT_PUBLIC|console\.(?:log|error)|token\s*:/);
+  assert.doesNotMatch(route, /NEXT_PUBLIC|console\.(?:log|error)/);
   assert.doesNotMatch(nextConfig, /rewrites|destination:\s*`http:\/\/127\.0\.0\.1/);
   assert.match(apiClient, /const API_BASE = "\/api";/);
   assert.doesNotMatch(apiClient, /NEXT_PUBLIC_API_BASE/);
@@ -209,6 +219,8 @@ test("desktop proxy requires a verified Electron proof for every method and stri
     new Headers({
       cookie: `${DESKTOP_SESSION_COOKIE}=${proof}; ordinary=also-removed`,
       expect: "100-continue",
+      origin: "http://127.0.0.1:61850",
+      referer: "http://127.0.0.1:61850/settings/ai-models",
       "x-internal-api-token": "attacker",
       "x-request-id": "request-1",
     }),
@@ -216,6 +228,8 @@ test("desktop proxy requires a verified Electron proof for every method and stri
   );
   assert.equal(upstream.get("cookie"), null);
   assert.equal(upstream.get("expect"), null);
+  assert.equal(upstream.get("origin"), null);
+  assert.equal(upstream.get("referer"), null);
   assert.equal(upstream.get("x-internal-api-token"), "a".repeat(64));
   assert.equal(upstream.get(READINESS_CHALLENGE_HEADER), null);
   assert.equal(upstream.get("x-request-id"), "request-1");
@@ -330,7 +344,8 @@ test("stable and port-stack launchers scope tokens and filter wrapper files", ()
   assert.match(dev, /selectServiceEnvironment\(/);
   assert.match(dev, /withoutInternalApiToken\(\{[\s\S]*?FORCE_WEB_CLEAN_BUILD/);
   assert.match(serviceEnvironment, /const RUNTIME_KEYS = \[[\s\S]*?"ALLOW_LOCAL_BROWSER_WEB_API"/);
-  assert.match(serviceEnvironment, /web: \[\.\.\.RUNTIME_KEYS, "INTERNAL_API_TOKEN", "DESKTOP_WEB_SESSION_PROOF"\]/);
+  assert.match(serviceEnvironment, /const CLOUD_CLIENT_ENV_KEYS = \[/);
+  assert.match(serviceEnvironment, /web: \[\.\.\.RUNTIME_KEYS, \.\.\.CLOUD_CLIENT_ENV_KEYS, "INTERNAL_API_TOKEN", "DESKTOP_WEB_SESSION_PROOF"\]/);
   assert.match(serviceEnvironment, /const WRAPPER_KEYS = new Set\(\[\.\.\.OS_ENV_KEYS, \.\.\.RUNTIME_KEYS,\s+"ALLOW_LOCAL_BROWSER_WEB_API"/);
 
   const wrapperSection = dev.slice(dev.indexOf("function buildWindowsServiceWrapper"), dev.indexOf("function serviceCwd"));

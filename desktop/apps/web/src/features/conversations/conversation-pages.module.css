@@ -16,7 +16,7 @@
 
 .detailPage .header {
   flex: 0 0 auto;
-  padding: 10px 0;
+  padding: 8px 0 10px;
 }
 
 .header,
@@ -50,9 +50,9 @@
 .panel p,
 .row p,
 .contextSection p {
-  margin: 4px 0 0;
+  margin: 3px 0 0;
   color: var(--wk-color-text-secondary);
-  line-height: 1.55;
+  line-height: 1.45;
 }
 
 .headerActions,
@@ -234,6 +234,16 @@
   flex: 1 1 auto;
 }
 
+.detailPage .header h1 {
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.detailPage :is(.button, .primaryButton, .linkButton) {
+  min-height: 36px;
+  padding: 5px 10px;
+}
+
 .threadHost > section {
   height: 100%;
 }
@@ -280,27 +290,38 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  padding: 14px 16px;
+  gap: 10px;
+  padding: 8px 12px;
   border: 1px solid #bfdbfe;
   border-radius: var(--wk-radius-lg);
-  background: #eff6ff;
+  background: #f8fbff;
 }
 
 .upgradeEntryBar div {
-  display: grid;
-  gap: 4px;
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
 }
 
 .upgradeEntryBar span {
+  min-width: 0;
   color: var(--wk-color-text-secondary);
-  line-height: 1.5;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .upgradePanel {
   color: var(--wk-color-text);
   border-color: #bfdbfe;
-  background: #eff6ff;
+  background: #f8fbff;
+}
+
+.detailPage .upgradePanel {
+  gap: 8px;
+  padding: 10px 12px;
 }
 
 .upgradePanelHeader {
@@ -319,7 +340,7 @@
 .upgradeForm {
   display: grid;
   grid-template-columns: minmax(180px, 0.7fr) minmax(280px, 1.3fr);
-  gap: 12px;
+  gap: 10px;
 }
 
 .upgradeField {
@@ -334,7 +355,8 @@
 }
 
 .upgradeField select,
-.upgradeField textarea {
+.upgradeField textarea,
+.upgradeSecretField input {
   width: 100%;
   min-width: 0;
   border: 1px solid var(--wk-color-border-strong);
@@ -346,12 +368,42 @@
 }
 
 .upgradeField select {
-  min-height: 44px;
+  min-height: 38px;
 }
 
 .upgradeField textarea {
-  min-height: 84px;
+  min-height: 60px;
+  max-height: 90px;
   resize: vertical;
+}
+
+.upgradeCredentialSetup {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(260px, 0.8fr) auto;
+  align-items: end;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #f3c77c;
+  border-radius: var(--wk-radius-md);
+  background: #fffaf0;
+}
+
+.upgradeCredentialSetup > div,
+.upgradeSecretField {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.upgradeCredentialSetup span,
+.upgradeSecretField span {
+  color: var(--wk-color-text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.upgradeSecretField input {
+  min-height: 38px;
 }
 
 .state {
@@ -444,6 +496,10 @@
     flex: 1 1 auto;
   }
 
+  .detailPage :is(.button, .primaryButton, .linkButton) {
+    min-height: 44px;
+  }
+
   .filters label {
     width: 100%;
     min-width: 0;
@@ -459,8 +515,23 @@
     flex-direction: column;
   }
 
+  .upgradeEntryBar div {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .upgradeEntryBar span {
+    white-space: normal;
+  }
+
   .upgradeForm {
     grid-template-columns: 1fr;
+  }
+
+  .upgradeCredentialSetup {
+    grid-template-columns: 1fr;
+    align-items: stretch;
   }
 
   .definitionList div {

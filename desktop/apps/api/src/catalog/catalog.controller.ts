@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from "@nestjs/common";
 import { CatalogService } from "./catalog.service";
 import { BundleRecommendPayload, SkuBatchUpdatePayload, SkuPayload } from "./catalog.types";
 import { OperatorAccessGuard, RequireOperatorCapability } from "../operator-access/operator-access.guard";
@@ -65,6 +65,12 @@ export class CatalogController {
   @RequireOperatorCapability("manage_design_executions")
   restoreSku(@Param("skuCode") skuCode: string) {
     return this.catalog.updateSkuStatus(skuCode, true);
+  }
+
+  @Delete("skus/:skuCode")
+  @RequireOperatorCapability("manage_design_executions")
+  deleteSku(@Param("skuCode") skuCode: string) {
+    return this.catalog.deleteSku(skuCode);
   }
 
   @Post("skus/bulk")

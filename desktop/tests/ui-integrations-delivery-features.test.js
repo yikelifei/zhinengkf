@@ -46,6 +46,7 @@ test("integration controllers reuse existing production components and real cont
   const channels = read("features/integrations/channels-status-page.tsx");
   const preflight = read("features/integrations/wechat-work-preflight-page.tsx");
   const configuration = read("features/integrations/wechat-work-configuration-page.tsx");
+  const firstSetup = read("features/integrations/wechat-work-first-setup-wizard.tsx");
   const flow = read("features/integrations/wechat-work-flow-page.tsx");
 
   assert.match(channels, /loadWechatChannelStatus/);
@@ -53,6 +54,15 @@ test("integration controllers reuse existing production components and real cont
   assert.doesNotMatch(channels, /personal_wechat:|mini_program/);
   assert.match(preflight, /getWechatWorkProductionPreflight/);
   assert.match(configuration, /readiness\.local\.checks/);
+  assert.match(configuration, /WechatWorkFirstSetupWizard/);
+  assert.match(firstSetup, /首次企业配置向导/);
+  assert.match(firstSetup, /validateWechatWorkCustomerServiceSecret\(secret, corpId\)/);
+  assert.match(firstSetup, /saveWechatWorkCustomerServiceCredential/);
+  assert.match(firstSetup, /callbackToken/);
+  assert.match(firstSetup, /encodingAesKey/);
+  assert.match(firstSetup, /enableAutomaticReplies/);
+  assert.match(firstSetup, /type="password"/);
+  assert.doesNotMatch(firstSetup, /localStorage|sessionStorage/);
   assert.match(flow, /status\.visualFlow/);
 });
 
@@ -95,7 +105,8 @@ test("send pages preserve identity binding, explicit confirmation, and fail-clos
   assert.match(policy, /manualLocked/);
   assert.match(policy, /isManualReplySendTask/);
   assert.match(policy, /task\.payload\?\.source === "manual_reply"/);
-  assert.match(policy, /isManualLocked\(task\) && !isManualReplySendTask\(task\)/);
+  assert.match(policy, /task\.conversation\?\.manualLocked/);
+  assert.match(policy, /!isManualReplySendTask\(task\)/);
   assert.match(policy, /blockedByRoutingPolicy/);
   assert.match(policy, /guardSnapshot\?\.status === "passed"/);
   assert.match(policy, /task\.status === "sending"/);

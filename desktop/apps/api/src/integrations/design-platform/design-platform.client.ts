@@ -19,9 +19,14 @@ import {
 } from "../zhenxi-mcp/zhenxi-mcp-client.service";
 import { DesignPlatformJobPayload } from "./design-platform.types";
 
-const { CUSTOMER_DESIGN_CANDIDATE_COUNT, inspectRealDesignReferences } = rules;
+const {
+  CUSTOMER_CREATIVE_DELIVERABLES,
+  CUSTOMER_DESIGN_CANDIDATE_COUNT,
+  inspectRealDesignReferences,
+} = rules;
 
 const trustedValidateStatus = (status: number) => status >= 200 && status < 300;
+const REQUIRED_ZHENXI_IMAGE_PROVIDER = "geeknow";
 
 function copyTransform<T>(value: T | T[] | undefined): T | T[] | undefined {
   return Array.isArray(value) ? [...value] : value;
@@ -100,6 +105,10 @@ type ArtImageLocalSlotOutcome =
       errorMessage: string;
       httpStatus?: number;
     };
+
+type ArtImageLocalCopyStageOutcome =
+  | { status: "completed"; prompts: string[]; httpStatus: number }
+  | { status: "failed" | "outcome_unknown"; errorCode: string; errorMessage: string; httpStatus?: number };
 
 type ZhenxiExternalMultipartFile = {
   fieldName: string;
@@ -667,6 +676,38 @@ export class DesignPlatformClient {
       };
     }
 
+    if (payload.designType === "zhenxi_image") {
+      const copyStage = await this.executeArtImageLocalCopyStage(requestBody, externalJobId);
+      if (copyStage.status !== "completed") {
+        if (copyStage.status === "outcome_unknown") {
+          return {
+            status: "outcome_unknown",
+            images: [],
+            refundStatus: "unknown",
+            errorCode: copyStage.errorCode,
+            errorMessage: copyStage.errorMessage,
+            ...(copyStage.httpStatus ? { httpStatus: copyStage.httpStatus } : {}),
+          };
+        }
+        return {
+          status: "failed",
+          images: [],
+          refundStatus: "not_required",
+          errorCode: copyStage.errorCode,
+          errorMessage: copyStage.errorMessage,
+          httpStatus: Number(copyStage.httpStatus || 0),
+        };
+      }
+      requestBody = {
+        ...requestBody,
+        prompts: copyStage.prompts.map((copyPrompt, index) => [
+          requestBody.prompt,
+          `臻希 AI 文案方案 ${index + 1}：${copyPrompt}`,
+          "只使用本方案对应的文案和视觉构图生成一张图片，不得混入其他候选方案。",
+        ].join("\n\n")),
+      };
+    }
+
     const slotOutcomes = await Promise.all(
       Array.from({ length: CUSTOMER_DESIGN_CANDIDATE_COUNT }, (_, index) =>
         this.executeArtImageLocalSlot(requestBody, externalJobId, index + 1),
@@ -715,6 +756,55 @@ export class DesignPlatformClient {
       refundSummary: refund.summary,
       httpStatus,
     };
+  }
+
+  private async executeArtImageLocalCopyStage(
+    requestBody: Awaited<ReturnType<DesignPlatformClient["buildArtImageLocalRequest"]>>,
+    externalJobId: string,
+  ): Promise<ArtImageLocalCopyStageOutcome> {
+    const copyRequest = {
+      ...requestBody,
+      requestId: `${externalJobId}:copy`,
+      type: "prompt",
+      promptInputs: Array.from({ length: CUSTOMER_DESIGN_CANDIDATE_COUNT }, (_, index) => [
+        requestBody.prompt,
+        `文案方案 ${index + 1}：文案和版式思路必须与其他方案明显不同，同时严格保留客户指定的主题、原文、禁忌、物料类型和构图方向。`,
+      ].join("\n\n")),
+      prompts: undefined,
+      count: CUSTOMER_DESIGN_CANDIDATE_COUNT,
+      concurrency: CUSTOMER_DESIGN_CANDIDATE_COUNT,
+    };
+    try {
+      const response = await this.http.post("api/local-generate", copyRequest);
+      const data = this.unwrapApiData(response.data) as { prompts?: unknown };
+      const prompts = isRecord(data) && Array.isArray(data.prompts)
+        ? data.prompts.map((value) => String(value || "").trim()).filter(Boolean)
+        : [];
+      if (
+        prompts.length !== CUSTOMER_DESIGN_CANDIDATE_COUNT
+        || new Set(prompts).size !== CUSTOMER_DESIGN_CANDIDATE_COUNT
+      ) {
+        return {
+          status: "outcome_unknown",
+          errorCode: "MALFORMED_COPY_STAGE_RESPONSE",
+          errorMessage: "design platform did not return exactly four distinct copy candidates; image dispatch was blocked",
+          httpStatus: Number(response.status || 200),
+        };
+      }
+      return {
+        status: "completed",
+        prompts,
+        httpStatus: Number(response.status || 200),
+      };
+    } catch (error) {
+      const knownFailure = axios.isAxiosError(error) && Boolean(error.response);
+      return {
+        status: knownFailure ? "failed" : "outcome_unknown",
+        errorCode: knownFailure ? artImageErrorCode(error) : "COPY_STAGE_DISPATCH_OUTCOME_UNKNOWN",
+        errorMessage: this.publicErrorMessage(error),
+        ...(knownFailure && error.response?.status ? { httpStatus: error.response.status } : {}),
+      };
+    }
   }
 
   private async executeArtImageLocalSlot(
@@ -814,8 +904,40 @@ export class DesignPlatformClient {
     payload: DesignPlatformJobPayload,
     externalJobId: string,
   ): Promise<ArtImageLocalGenerationOutcome> {
+    if (this.useZhenxiExternalAdapter() && !this.zhenxiMcp?.enabled()) {
+      return this.executeZhenxiExternalGeneration(payload, externalJobId);
+    }
+    const providerBlock = await this.verifyRequiredZhenxiImageProvider();
+    if (providerBlock) return providerBlock;
     if (this.useZhenxiExternalAdapter()) return this.executeZhenxiExternalGeneration(payload, externalJobId);
     return this.executeArtImageLocalGeneration(payload, externalJobId);
+  }
+
+  private async verifyRequiredZhenxiImageProvider(): Promise<ArtImageLocalGenerationOutcome | null> {
+    try {
+      const health = await this.health();
+      const provider = zhenxiImageProviderFromHealth(health);
+      if (provider === REQUIRED_ZHENXI_IMAGE_PROVIDER) return null;
+      return {
+        status: "failed",
+        images: [],
+        refundStatus: "not_required",
+        errorCode: "ZHENXI_GEEKNOW_PROVIDER_REQUIRED",
+        errorMessage: provider
+          ? `Zhenxi AI image provider is ${provider}; GeekNow is required, so generation was blocked before dispatch`
+          : "Zhenxi AI did not prove that GeekNow is the active image provider; generation was blocked before dispatch",
+        httpStatus: 0,
+      };
+    } catch (error) {
+      return {
+        status: "failed",
+        images: [],
+        refundStatus: "not_required",
+        errorCode: "ZHENXI_GEEKNOW_PROVIDER_UNVERIFIED",
+        errorMessage: `Zhenxi AI GeekNow provider verification failed; generation was blocked before dispatch: ${this.publicErrorMessage(error)}`,
+        httpStatus: 0,
+      };
+    }
   }
 
   private async executeZhenxiExternalGeneration(
@@ -842,14 +964,15 @@ export class DesignPlatformClient {
     try {
       if (payload.designType === "zhenxi_image" && payload.requirements?.useRealSkuImages === false) {
         const settings = zhenxiImageSettings(payload);
+        const material = zhenxiMaterialSettings(payload);
         const data = await this.zhenxiMcp!.generateNativeImages({
           prompt: buildDesignPrompt(payload),
           count: CUSTOMER_DESIGN_CANDIDATE_COUNT,
           size: settings.size,
           ratio: settings.ratio,
           requestId: externalJobId,
-          cardType: "空白模板",
-          templateGroupKey: "blank",
+          cardType: material.cardType,
+          templateGroupKey: material.templateGroupKey,
         });
         return this.zhenxiNativeOutcome(data, settings.size);
       }
@@ -974,6 +1097,7 @@ export class DesignPlatformClient {
     const prompt = buildDesignPrompt(payload);
     const count = CUSTOMER_DESIGN_CANDIDATE_COUNT;
     const settings = zhenxiImageSettings(payload);
+    const material = zhenxiMaterialSettings(payload);
     const failedAssets = payload.assets.filter((asset) => asset.uploadError);
     if (failedAssets.length) {
       throw new Error(`design asset upload failed: ${failedAssets.map((asset) => asset.fileName || asset.assetId).join(", ")}`);
@@ -1014,8 +1138,8 @@ export class DesignPlatformClient {
           count: String(count),
           size: settings.size,
           ratio: settings.ratio,
-          cardType: "空白模板",
-          templateGroupKey: "blank",
+          cardType: material.cardType,
+          templateGroupKey: material.templateGroupKey,
         },
         files,
       ),
@@ -1027,6 +1151,7 @@ export class DesignPlatformClient {
   private async buildZhenxiExternalMcpRequest(payload: DesignPlatformJobPayload) {
     const request = await this.buildZhenxiExternalRequest(payload);
     const settings = zhenxiImageSettings(payload);
+    const material = zhenxiMaterialSettings(payload);
     return {
       prompt: buildDesignPrompt(payload),
       count: request.count,
@@ -1034,8 +1159,8 @@ export class DesignPlatformClient {
       ratio: settings.ratio,
       referencePaths: request.referencePaths,
       requestId: payload.requestId,
-      cardType: "空白模板",
-      templateGroupKey: "blank",
+      cardType: material.cardType,
+      templateGroupKey: material.templateGroupKey,
       copyModule: zhenxiCopyModule(payload),
     };
   }
@@ -1064,7 +1189,8 @@ export class DesignPlatformClient {
   }
 
   private async buildArtImageLocalRequest(payload: DesignPlatformJobPayload) {
-    const prompt = buildGiftBoxPrompt(payload);
+    const customerCreative = payload.designType === "zhenxi_image";
+    const prompt = customerCreative ? buildDesignPrompt(payload) : buildGiftBoxPrompt(payload);
     const count = CUSTOMER_DESIGN_CANDIDATE_COUNT;
     const failedAssets = payload.assets.filter((asset) => asset.uploadError);
     if (failedAssets.length) {
@@ -1078,40 +1204,49 @@ export class DesignPlatformClient {
       const realRefs = inspectRealDesignReferences({
         assets: assetRefs.map((url, index) => ({ id: `uploaded_asset_${index + 1}`, url })),
         bundle: payload.bundle,
+        requireCustomerAssets: true,
+        requireCompleteBundle: !customerCreative,
       });
       if (!realRefs.usableAssetCount) {
         throw new Error("customer reference image is required for real design generation");
       }
-      if (!realRefs.bundleRefs.length) {
+      if (!customerCreative && !realRefs.bundleRefs.length) {
         throw new Error("SKU or gift-box image is required for real design generation");
       }
-      if (realRefs.unusableBundleImageCount) {
+      if (!customerCreative && realRefs.unusableBundleImageCount) {
         throw new Error("every SKU and gift-box item must have a usable PNG/JPG/WebP image before design generation");
       }
-      if (!bundleRefs.length) {
+      if (!customerCreative && !bundleRefs.length) {
         throw new Error("no uploadable SKU or gift-box images were found for real design generation");
       }
     }
     const objectRefs = uniqueRefs([...assetRefs, ...bundleRefs]).slice(0, 12);
+    const settings = zhenxiImageSettings(payload);
+    const zhenxi = isRecord(payload.requirements?.zhenxi) ? payload.requirements.zhenxi : {};
+    const material = zhenxiMaterialSettings(payload);
 
     return {
       requestId: payload.requestId,
       type: "image",
-      module: "poster_copy",
+      module: customerCreative ? zhenxiCopyModule(payload) : "poster_copy",
       projectId: payload.orderId || payload.requestId,
-      projectName: `客服礼盒出图-${payload.customerId}`,
+      projectName: customerCreative ? `客服客户物料-${payload.customerId}` : `客服礼盒出图-${payload.customerId}`,
       prompt,
-      prompts: Array.from({ length: count }, (_, index) => `${prompt}\n\n候选图 ${index + 1}：构图、角度和背景要和其他候选图不同，但商品、礼盒和素材必须一致。`),
+      prompts: customerCreative
+        ? []
+        : Array.from({ length: count }, (_, index) => `${prompt}\n\n候选图 ${index + 1}：构图、角度和背景要和其他候选图不同，但商品、礼盒和素材必须一致。`),
       count,
       concurrency: count,
-      size: appConfig.designPlatformImageSize,
-      ratio: appConfig.designPlatformImageRatio,
-      category: "gift_box",
-      templateGroupKey: "gift_box_render",
-      cardType: appConfig.designPlatformCardType,
+      size: customerCreative ? settings.size : appConfig.designPlatformImageSize,
+      ratio: customerCreative ? settings.canvasSize : appConfig.designPlatformImageRatio,
+      category: customerCreative ? material.category : "gift_box",
+      templateGroupKey: customerCreative ? material.templateGroupKey : "gift_box_render",
+      cardType: customerCreative ? material.cardType : appConfig.designPlatformCardType,
       objectRefs,
-      expert:
-        "你是礼盒产品摆拍设计师。只生成真实产品摆拍效果图，不生成海报排版，不添加营销标题，不更换商品，不虚构包装。",
+      transparent: customerCreative && zhenxi.transparent === true,
+      expert: customerCreative
+        ? `你是商业物料设计交付设计师。必须使用“${material.cardType}”，严格按客户要求只制作指定物料；先形成四条可直接上版的文案与构图方案，再让每条方案各生成一张图片。不得套用礼盒或其他项目模板，不增加未要求的商品、包装、品牌或联系方式。`
+        : "你是礼盒产品摆拍设计师。只生成真实产品摆拍效果图，不生成海报排版，不添加营销标题，不更换商品，不虚构包装。",
     };
   }
 
@@ -1197,7 +1332,7 @@ function buildDesignPrompt(payload: DesignPlatformJobPayload) {
     forbidInventedProducts && visualContentMode !== "real_product"
       ? "未提供真实商品素材，禁止为了丰富画面自行增加任何商品或包装。"
       : "",
-    `输出尺寸：${settings.size}；画幅比例：${settings.ratio}。`,
+    `图片生成尺寸：${settings.size}；物料画布：${settings.canvasSize}。`,
     zhenxi.transparent === true ? "背景必须透明。" : "背景按客户需求处理。",
     "必须高清、无水印。",
     "成品必须达到可直接发客户确认的商业设计条件：主体完整、文字在安全区内、手机缩略图可读、不得只是无信息的通用占位背景。",
@@ -1209,11 +1344,32 @@ function buildDesignPrompt(payload: DesignPlatformJobPayload) {
 
 function zhenxiImageSettings(payload: DesignPlatformJobPayload) {
   const zhenxi = isRecord(payload.requirements?.zhenxi) ? payload.requirements.zhenxi : {};
-  const requestedSize = String(zhenxi.size || "").trim();
+  const requestedImageSize = String(zhenxi.imageSize || zhenxi.size || "").trim();
   const requestedRatio = String(zhenxi.ratio || "").trim();
+  const requestedCanvasSize = String(zhenxi.canvasSize || zhenxi.size || requestedRatio || "").trim();
   return {
-    size: /^\d{2,5}x\d{2,5}$/i.test(requestedSize) ? requestedSize : appConfig.designPlatformImageSize,
-    ratio: /^\d{1,2}:\d{1,2}$/i.test(requestedRatio) ? requestedRatio : appConfig.designPlatformImageRatio,
+    size: /^\d{2,5}x\d{2,5}$/i.test(requestedImageSize)
+      ? requestedImageSize
+      : appConfig.designPlatformImageSize,
+    ratio: /^\d{1,2}:\d{1,2}$/i.test(requestedRatio)
+      ? requestedRatio
+      : appConfig.designPlatformImageRatio,
+    canvasSize: /^(?:\d{1,2}:\d{1,2}|\d{2,5}x\d{2,5})$/i.test(requestedCanvasSize)
+      ? requestedCanvasSize
+      : appConfig.designPlatformImageRatio,
+  };
+}
+
+function zhenxiMaterialSettings(payload: DesignPlatformJobPayload) {
+  const zhenxi = isRecord(payload.requirements?.zhenxi) ? payload.requirements.zhenxi : {};
+  const deliverable = String(zhenxi.deliverable || "").trim();
+  const definition = isRecord(CUSTOMER_CREATIVE_DELIVERABLES?.[deliverable])
+    ? CUSTOMER_CREATIVE_DELIVERABLES[deliverable]
+    : {};
+  return {
+    category: String(definition.category || zhenxi.category || "blank"),
+    templateGroupKey: String(definition.templateGroupKey || zhenxi.templateGroupKey || "blank"),
+    cardType: String(definition.cardType || zhenxi.cardType || "空白模板"),
   };
 }
 
@@ -1711,6 +1867,12 @@ function designPlatformBoundaryError(message: string) {
 
 function safeIdPart(value: string) {
   return String(value || "request").replace(/[^A-Za-z0-9_.:-]/g, "_").slice(0, 60) || randomUUID();
+}
+
+function zhenxiImageProviderFromHealth(value: unknown) {
+  if (!isRecord(value)) return "";
+  const ai = isRecord(value.ai) ? value.ai : {};
+  return String(ai.provider || "").trim().toLowerCase();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

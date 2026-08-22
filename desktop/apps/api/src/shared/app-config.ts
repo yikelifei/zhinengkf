@@ -253,10 +253,16 @@ export const appConfig = {
   wechatWorkCorpId: process.env.WECHAT_WORK_CORP_ID || "",
   wechatWorkAgentId: process.env.WECHAT_WORK_AGENT_ID || "",
   wechatWorkSecret: process.env.WECHAT_WORK_SECRET || "",
+  wechatWorkExternalContactSecret: process.env.WECHAT_WORK_EXTERNAL_CONTACT_SECRET || "",
   wechatWorkToken: process.env.WECHAT_WORK_TOKEN || "",
   wechatWorkEncodingAesKey: process.env.WECHAT_WORK_ENCODING_AES_KEY || "",
   wechatWorkOpenKfid: process.env.WECHAT_WORK_OPEN_KFID || "",
   wechatWorkApiBaseUrl: trimTrailingSlash(process.env.WECHAT_WORK_API_BASE_URL || "https://qyapi.weixin.qq.com"),
+  wechatWorkApiRelayToken: process.env.WECHAT_WORK_API_RELAY_TOKEN || "",
+  wechatWorkCallbackProcessingMode:
+    String(process.env.WECHAT_WORK_CALLBACK_PROCESSING_MODE || "process").trim().toLowerCase() === "signal_only"
+      ? "signal_only" as const
+      : "process" as const,
   wechatWorkSuiteId: process.env.WECHAT_WORK_SUITE_ID || "",
   wechatWorkSuiteSecret: process.env.WECHAT_WORK_SUITE_SECRET || "",
   wechatWorkSuiteToken: process.env.WECHAT_WORK_SUITE_TOKEN || "",

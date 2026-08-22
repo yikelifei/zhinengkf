@@ -248,6 +248,64 @@
   gap: 10px;
 }
 
+.segmentedTabs {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  border: 1px solid var(--governance-border);
+  border-radius: 8px;
+  padding: 4px;
+  background: #f9fafb;
+}
+
+.sectionTabs {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.segmentedTab {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 7px 9px;
+  color: #4e5969;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.segmentedTab span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.segmentedTab b {
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.segmentedTab:hover {
+  color: var(--governance-brand);
+  background: var(--governance-brand-soft);
+}
+
+.segmentedTabActive,
+.segmentedTabActive:hover {
+  border-color: var(--governance-brand);
+  color: #ffffff;
+  background: var(--governance-brand);
+}
+
 .record {
   display: grid;
   gap: 10px;
@@ -617,6 +675,14 @@
   .formGrid,
   .definitionList {
     grid-template-columns: 1fr;
+  }
+
+  .segmentedTabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .sectionTabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .wideField {

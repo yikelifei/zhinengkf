@@ -55,6 +55,28 @@ test("private snapshot records the complete stable tree and cleans only its exac
   assert.equal(fs.existsSync(snapshot.tempRoot), false);
 });
 
+test("private temp cleanup retries a transient directory lock", () => {
+  const handle = createPrivateTemp();
+  const originalRename = fs.renameSync;
+  let attempts = 0;
+  fs.renameSync = (source, destination) => {
+    if (path.resolve(source) === path.resolve(handle.tempRoot) && attempts++ === 0) {
+      const error = new Error("synthetic transient directory lock");
+      error.code = "EPERM";
+      throw error;
+    }
+    return originalRename(source, destination);
+  };
+  try {
+    cleanupPrivateTemp(handle);
+  } finally {
+    fs.renameSync = originalRename;
+    if (fs.existsSync(handle.tempRoot)) cleanupPrivateTemp(handle);
+  }
+  assert.equal(attempts, 2);
+  assert.equal(fs.existsSync(handle.tempRoot), false);
+});
+
 test("private temp cleanup rejects a replaced directory and preserves its sentinel", (t) => {
   const handle = createPrivateTemp();
   fs.rmSync(handle.tempRoot, { recursive: true, force: true });

@@ -1,6 +1,7 @@
 import {
   batchUpdateSkus,
   bulkUpsertSkus,
+  deleteSku,
   downloadSkuImportTemplate,
   getSkuCatalogAudit,
   getSkus,
@@ -13,6 +14,7 @@ import {
 export {
   batchUpdateSkus,
   bulkUpsertSkus,
+  deleteSku,
   downloadSkuImportTemplate,
   getSkuCatalogAudit,
   previewSkuImportFile,

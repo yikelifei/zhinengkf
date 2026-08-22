@@ -362,8 +362,8 @@ test("answers the price question before using an attachment-bearing Xiaoshi samp
 
   assert.equal(draft.knowledgeMatches.length, 1);
   assert.equal(draft.knowledgeMatches[0].humanVerbatim, true);
-  assert.match(draft.suggestedReply, /价格|单价/);
-  assert.match(draft.suggestedReply, /多少份/);
+  assert.match(draft.suggestedReply, /标价|报价/);
+  assert.match(draft.suggestedReply, /哪一本|哪一页|第几个/);
   assert.equal(draft.replyDraft.directAnswer.applied, true);
   assert.doesNotMatch(draft.suggestedReply, /附件|引用/);
 });
@@ -396,7 +396,7 @@ test("does not match unrelated knowledge only because it has a high quality scor
   assert.equal(draft.suggestedReply, "您要多少份呀");
 });
 
-test("answers a matched product with registered public catalog facts", () => {
+test("uses catalog facts for inventory but never exposes the catalog cost as a selling price", () => {
   const draft = buildAgentReplyDraft(
     {
       text: "红金商务礼盒多少钱？要100套",
@@ -428,9 +428,10 @@ test("answers a matched product with registered public catalog facts", () => {
   assert.equal(draft.replyDraft.source, "catalog_enhanced");
   assert.match(draft.suggestedReply, /红金商务礼盒/);
   assert.match(draft.suggestedReply, /BOX-REAL-1/);
-  assert.match(draft.suggestedReply, /88/);
+  assert.doesNotMatch(draft.suggestedReply, /88/);
   assert.match(draft.suggestedReply, /还差 20/);
-  assert.doesNotMatch(draft.suggestedReply, /secret supplier|成本|毛利/);
+  assert.match(draft.suggestedReply, /PPT页面标价/);
+  assert.doesNotMatch(draft.suggestedReply, /secret supplier|毛利/);
 });
 
 test("writes a safe catalog bundle into a pre-sales reply", () => {
@@ -463,9 +464,9 @@ test("writes a safe catalog bundle into a pre-sales reply", () => {
   assert.equal(draft.replyDraft.source, "catalog_enhanced");
   assert.match(draft.suggestedReply, /红金礼盒A/);
   assert.match(draft.suggestedReply, /茶叶礼品B/);
-  assert.match(draft.suggestedReply, /85/);
+  assert.doesNotMatch(draft.suggestedReply, /85/);
   assert.match(draft.suggestedReply, /100/);
-  assert.match(draft.suggestedReply, /最终优惠.*正式报价/);
+  assert.match(draft.suggestedReply, /PPT款式页标价/);
 });
 
 test("asks for order and photo evidence for damaged after-sales goods", () => {
@@ -488,7 +489,7 @@ test("asks for order and photo evidence for damaged after-sales goods", () => {
   assert.match(draft.suggestedReply, /退款/);
 });
 
-test("labels a truncated bundle before showing the complete combination total", () => {
+test("labels a truncated bundle without exposing its internal catalog total", () => {
   const items = [
     ["BOX-A", "礼盒", 40],
     ["ITEM-A", "茶点", 29],
@@ -517,5 +518,6 @@ test("labels a truncated bundle before showing the complete combination total", 
   );
 
   assert.match(draft.suggestedReply, /等 6 件/);
-  assert.match(draft.suggestedReply, /完整组合.*145/);
+  assert.doesNotMatch(draft.suggestedReply, /145/);
+  assert.match(draft.suggestedReply, /PPT款式页标价/);
 });

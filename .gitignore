@@ -1,5 +1,6 @@
 # Secrets (never commit real keys)
 .env
+desktop/config/cloud-client.env
 
 # Local assistant/editor state
 .claude/
@@ -61,6 +62,9 @@ desktop/.next/
 desktop/out/
 desktop/dist/
 desktop/release/
+desktop/output/
+desktop/tmp/
+desktop/.verification/
 desktop/.package-provenance.json
 desktop/.package-runtime/
 desktop/.package-cache/
@@ -74,6 +78,7 @@ desktop/generated/
 desktop/*.tsbuildinfo
 desktop/.runtime-stable/
 desktop/.env.stage-*.bak
+desktop/.env.pre-*
 desktop/training-knowledge-current*.png
 
 # Personal WeChat RPA local .NET build output

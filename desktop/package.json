@@ -1,6 +1,6 @@
 {
   "name": "smart-kefu-desktop",
-  "version": "0.1.0",
+  "version": "0.1.8",
   "private": true,
   "description": "Windows desktop intelligent customer service platform with gift-box design platform integration.",
   "main": "apps/electron/main.js",
@@ -26,6 +26,7 @@
     "config:doctor": "..\\config-readiness-doctor.cmd",
     "ci:release-quality": "node tools/ci-release-quality.js",
     "project:completion:audit": "node tools/project-completion-audit.js",
+    "wechat-work:docs:audit": "node tools/audit-wechat-work-official-api.js",
     "release:gate": "node tools/production-release-gate.js",
     "release:gate:isolated": "node tools/production-release-gate.js --isolated-worktree",
     "staging:readiness": "node tools/staging-readiness-evidence.js",
@@ -102,6 +103,7 @@
     "wechat:safe:status": "node tools/start-wechat-safe-workers.js --status",
     "wechat:safe:stop": "node tools/start-wechat-safe-workers.js --stop",
     "data:reset": "node tools/reset-local-store.js",
+    "knowledge:curate-chat": "node tools/curate-chat-knowledge.js",
     "prisma:generate": "prisma generate --schema prisma/schema.prisma",
     "prisma:validate": "prisma validate --schema prisma/schema.prisma",
     "prisma:migrate:check": "prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script",

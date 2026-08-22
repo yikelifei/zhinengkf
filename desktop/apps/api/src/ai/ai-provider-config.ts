@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { AI_PROVIDER_PRESETS, getAiProviderPreset, presetAsRawConfig } from "./ai-provider-presets";
+import { AI_PROVIDER_PRESETS, getAiProviderPreset, presetAsRawConfig, providerBaseUrlEnv } from "./ai-provider-presets";
 
 const yaml = require("js-yaml") as { load(source: string): unknown };
 
@@ -12,6 +12,8 @@ export type AiProviderConfig = {
   enabled: boolean;
   credentialSource: "environment" | "zhenxi_ai_shared" | "invalid";
   sharedSourceConfigured: boolean;
+  sharedEnvPath: string;
+  sharedModelEnv: string;
   apiKey: string;
   baseUrl: string;
   model: string;
@@ -29,6 +31,7 @@ export type AiProviderConfig = {
   apiKeyEnv: string;
   enabledEnv: string;
   modelEnv: string;
+  baseUrlEnv: string;
   docsUrl: string;
   keyOnlySetup: boolean;
   configured: boolean;
@@ -61,6 +64,11 @@ export type AiProviderRuntimeConfig = {
     videoFrameCount: number;
   };
   providers: AiProviderConfig[];
+  billingCredentials: {
+    alibabaCloudAccessKeyId: string;
+    alibabaCloudAccessKeySecret: string;
+    openAiAdminKey: string;
+  };
   settingsPath: string;
   envPath: string;
 };
@@ -113,6 +121,11 @@ export function loadAiProviderRuntime(options: { settingsPath?: string; env?: No
       videoFrameCount: boundedInteger(rawMultimodal.video_frame_count, 3, 1, 5),
     },
     providers,
+    billingCredentials: {
+      alibabaCloudAccessKeyId: cleanSecret(env.ALIBABA_CLOUD_ACCESS_KEY_ID),
+      alibabaCloudAccessKeySecret: cleanSecret(env.ALIBABA_CLOUD_ACCESS_KEY_SECRET),
+      openAiAdminKey: cleanSecret(env.OPENAI_ADMIN_KEY),
+    },
     settingsPath,
     envPath,
   };
@@ -146,12 +159,17 @@ function normalizeProvider(
   const sharedEnvPath = credentialSource === "zhenxi_ai_shared" && configuredSharedPath
     ? path.resolve(path.dirname(settingsPath), configuredSharedPath)
     : "";
+  const sharedModelEnv = credentialSource === "zhenxi_ai_shared"
+    ? exactEnvReference(text(raw.model))
+    : "";
   const sharedSourceConfigured = Boolean(sharedEnvPath && isReadableRegularFile(sharedEnvPath));
   const providerEnv = sharedSourceConfigured ? { ...env, ...readEnvFile(sharedEnvPath) } : env;
   const apiKey = expandEnv(text(raw.api_key), providerEnv);
   const baseUrl = trimTrailingSlash(expandEnv(text(raw.base_url), providerEnv));
   const model = expandEnv(text(raw.model), providerEnv);
-  const visionEnabled = booleanValue(raw.vision_enabled, false);
+  const visionEnabled = preset?.visionEnabled === false
+    ? false
+    : booleanValue(raw.vision_enabled, false);
   const visionModel = expandEnv(text(raw.vision_model), providerEnv) || model;
   const audioInputEnabled = booleanValue(raw.audio_input_enabled, false);
   const audioInputModel = expandEnv(text(raw.audio_input_model), providerEnv) || visionModel || model;
@@ -180,6 +198,8 @@ function normalizeProvider(
     enabled,
     credentialSource,
     sharedSourceConfigured,
+    sharedEnvPath,
+    sharedModelEnv,
     apiKey,
     baseUrl,
     model,
@@ -197,6 +217,7 @@ function normalizeProvider(
     apiKeyEnv: preset?.apiKeyEnv || "",
     enabledEnv: preset?.enabledEnv || "",
     modelEnv: preset?.modelEnv || "",
+    baseUrlEnv: preset ? providerBaseUrlEnv(preset) : "",
     docsUrl: preset?.docsUrl || "",
     keyOnlySetup: Boolean(preset),
     configured: enabled && issues.length === 0,
@@ -205,6 +226,10 @@ function normalizeProvider(
 }
 
 const SUPPORTED_REQUEST_FORMATS = new Set(["openai", "anthropic"]);
+
+function exactEnvReference(value: string) {
+  return value.trim().match(/^\$\{([A-Z][A-Z0-9_]*)\}$/)?.[1] || "";
+}
 
 function isReadableRegularFile(filePath: string) {
   try {
@@ -255,6 +280,11 @@ function looksUnset(value: string) {
   const normalized = value.trim().toLowerCase();
   return !normalized || normalized.includes("${") || normalized.startsWith("sk-your-") || normalized.startsWith("your-") ||
     normalized.includes("example.com") || ["changeme", "change-me", "replace-me"].includes(normalized);
+}
+
+function cleanSecret(value: unknown) {
+  const resolved = text(value);
+  return looksUnset(resolved) ? "" : resolved;
 }
 
 function text(value: unknown) {

@@ -7,8 +7,10 @@
   --overview-surface: var(--wk-color-surface);
   --overview-subtle: var(--wk-color-surface-subtle);
   display: flex;
+  width: 100%;
+  max-width: 1440px;
   min-width: 0;
-  min-height: 100%;
+  min-height: 0;
   flex-direction: column;
   gap: 12px;
   padding: 0;
@@ -464,16 +466,22 @@
 }
 
 .conversationPanel {
-  flex: 1 1 auto;
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
   min-height: 242px;
 }
 
 .tableWrap {
-  overflow: auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
 }
 
 .tableWrap table {
   width: 100%;
+  min-width: 860px;
   border-collapse: collapse;
   table-layout: fixed;
   font-size: 11px;
@@ -681,6 +689,10 @@
   .tableWrap td {
     display: block;
     width: 100%;
+  }
+
+  .tableWrap table {
+    min-width: 0;
   }
 
   .tableWrap thead {

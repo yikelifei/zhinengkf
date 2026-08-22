@@ -116,10 +116,12 @@ test("access page is a read-only presentation of server-enforced policy", () => 
   assert.doesNotMatch(source, /grant|elevate|localStorage|sessionStorage/i);
 });
 
-test("AI model center separates provider status from guarded key-only setup", () => {
+test("AI model center separates the provider workspace from guarded backend operations", () => {
   const source = [
     read("apps/web/src/features/system/ai-models-page.tsx"),
-    read("apps/web/src/features/system/ai-provider-credential-setup.tsx"),
+    read("apps/web/src/features/system/ai-model-provider-manager.tsx"),
+    read("apps/web/src/features/system/ai-model-server-view.tsx"),
+    read("apps/web/src/features/system/ai-model-center-utils.ts"),
   ].join("\n");
   const api = read("apps/web/src/lib/api.ts");
   assert.match(source, /getAiProviderStatus/);
@@ -127,18 +129,27 @@ test("AI model center separates provider status from guarded key-only setup", ()
   assert.match(source, /data-action-id="ai-models-probe"/);
   assert.match(source, /probe \? await probeAiProviderStatus\(\) : await getAiProviderStatus\(\)/);
   assert.match(source, /saveAiProviderCredential/);
+  assert.match(source, /generateAiProviderServerEnv/);
+  assert.match(source, /syncAiProviderModels/);
   assert.match(source, /type="password"/);
   assert.match(source, /autoComplete="off"/);
-  assert.match(source, /data-action-id=\{`ai-models-provider-\$\{provider\.name\}-save`\}/);
-  assert.match(source, /data-action-id=\{`ai-models-provider-\$\{provider\.name\}-disable`\}/);
-  assert.match(source, /已复用臻希AI模型/);
+  assert.match(source, /data-action-id=\{`ai-models-provider-\$\{selected\.name\}-save`\}/);
+  assert.match(source, /data-action-id="ai-models-provider-enable-all-saved"/);
+  assert.match(source, /selected\.enabled \? "disable" : "enable"/);
+  assert.match(source, /providerSort\(props\.status\.providers\)/);
+  assert.match(source, /providers\.map/);
+  assert.match(source, /模型服务商/);
   assert.match(source, /臻希AI共享配置/);
   assert.match(source, /credentialSource/);
   assert.match(source, /复用臻希AI密钥/);
-  assert.match(source, /aiProviderPresentation/);
-  assert.match(source, /该供应商已停用，不参与当前主备路由/);
+  assert.match(source, /服务器密钥文件/);
+  assert.match(source, /data-action-id="ai-models-server-env-generate"/);
+  assert.match(source, /API 地址/);
+  assert.match(source, /手动输入模型 ID/);
   assert.match(api, /\/ai\/providers\/status/);
   assert.match(api, /\/ai\/providers\/\$\{encodeURIComponent\(provider\)\}\/credential/);
+  assert.match(api, /\/ai\/providers\/\$\{encodeURIComponent\(provider\)\}\/models\/sync/);
+  assert.match(api, /\/ai\/providers\/server-env/);
   assert.doesNotMatch(source, /\bfetch\s*\(|\baxios\b|postJson|patchJson|localStorage|sessionStorage/i);
   assert.doesNotMatch(source, /type="text"[\s\S]{0,120}API Key|setStatus\([^)]*apiKey|console\.(?:log|info|debug)/i);
 });

@@ -8,7 +8,7 @@ import {
   AiRoutingTier,
   loadAiProviderRuntime,
 } from "./ai-provider-config";
-import { getAiProviderPreset } from "./ai-provider-presets";
+import { getAiProviderPreset, providerBaseUrlEnv } from "./ai-provider-presets";
 import { rules } from "../shared/rules";
 
 const { xiaoshiPromptGuidance } = rules;
@@ -71,6 +71,92 @@ export type AiCompletionResult = {
   qualityEscalated?: boolean;
 };
 
+export type AiProviderServerEnvBundle = {
+  generated: true;
+  generatedAt: string;
+  filePath: string;
+  fileName: string;
+  envText: string;
+  providerCount: number;
+  configuredProviderCount: number;
+  missingProviders: Array<{
+    name: string;
+    label: string;
+    apiKeyEnv: string;
+    enabledEnv: string;
+    modelEnv: string;
+    baseUrlEnv: string;
+  }>;
+  includedProviders: Array<{
+    name: string;
+    label: string;
+    enabled: boolean;
+    apiKeyConfigured: boolean;
+    apiKeyEnv: string;
+    modelEnv: string;
+    baseUrlEnv: string;
+  }>;
+  copyHint: string;
+};
+
+export type AiProviderBalanceResult = {
+  checked: boolean;
+  supported: boolean;
+  metric: "balance" | "cost";
+  status: "available" | "insufficient" | "unsupported" | "error";
+  display: string;
+  amount: number | null;
+  currency: string | null;
+  endpoint: string;
+  checkedAt: string | null;
+  details: Array<{ label: string; value: string }>;
+  error?: string;
+};
+
+export type AiProviderResponseTestResult = {
+  tested: true;
+  testedAt: string;
+  provider: string;
+  label: string;
+  model: string;
+  enabled: boolean;
+  configured: boolean;
+  testUrl: string;
+  requestKind: "chat_completion";
+  expectedReply: string;
+  available: boolean;
+  latencyMs: number;
+  outputCharacters: number;
+  charactersPerSecond: number;
+  responsePreview: string;
+  replyMatched: boolean;
+  balance: AiProviderBalanceResult;
+  checks: Array<{
+    key: "configuration" | "connection" | "response" | "speed";
+    label: string;
+    ok: boolean;
+    detail: string;
+  }>;
+  error?: string;
+};
+
+type AiProviderObservations = {
+  schema: "smart_kefu_ai_provider_observations_v1";
+  updatedAt: string | null;
+  tests: Record<string, AiProviderResponseTestResult>;
+  balances: Record<string, AiProviderBalanceResult>;
+};
+
+export type AiProviderModelSyncResult = {
+  synced: true;
+  provider: string;
+  label: string;
+  source: "upstream";
+  endpoint: string;
+  fetchedAt: string;
+  models: Array<{ id: string; label: string }>;
+};
+
 type RouterOptions = {
   fetchImpl?: typeof fetch;
   sleep?: (milliseconds: number) => Promise<void>;
@@ -80,6 +166,7 @@ type RouterOptions = {
 
 type CompletionOptions = {
   providerOrder?: string[];
+  priorityProviderOrder?: string[];
   deadlineAt?: number;
   maxRetries?: number;
 };
@@ -117,6 +204,9 @@ const PROVIDER_BASE_COOLDOWN_MS = 15_000;
 const PROVIDER_MAX_COOLDOWN_MS = 120_000;
 const MAX_DEADLINE_PROVIDER_CANDIDATES = 3;
 const MAX_STANDARD_PROVIDER_CANDIDATES = 4;
+const HIGH_COST_FALLBACK_PROVIDERS = new Set(["openai"]);
+const HIGH_COST_FALLBACK_SCORE_PENALTY = 1_000_000;
+const CUSTOMER_SERVICE_REPLY_PRIORITY_PROVIDERS = ["zhipu", "dashscope", "deepseek"] as const;
 
 export class AiProviderPerformanceTracker {
   private readonly records = new Map<string, AiProviderPerformanceRecord>();
@@ -204,7 +294,16 @@ export class AiProviderPerformanceTracker {
     const failureRate = performance.successRate === null ? 0 : 1 - performance.successRate;
     const tierPenalty = provider.routingTier === preferredTier ? 0 : 5_000;
     const circuitPenalty = performance.circuitState === "half_open" ? 750 : performance.circuitState === "open" ? 100_000 : 0;
-    return tierPenalty + circuitPenalty + latency + failureRate * 2_000 + performance.consecutiveFailures * 1_000 + chainIndex * 25;
+    const highCostFallbackPenalty = HIGH_COST_FALLBACK_PROVIDERS.has(provider.name)
+      ? HIGH_COST_FALLBACK_SCORE_PENALTY
+      : 0;
+    return tierPenalty
+      + circuitPenalty
+      + highCostFallbackPenalty
+      + latency
+      + failureRate * 2_000
+      + performance.consecutiveFailures * 1_000
+      + chainIndex * 25;
   }
 
   private record(providerName: string) {
@@ -235,13 +334,17 @@ export class AiProviderService {
     const router = new OpenAiCompatibleRouter(runtime, { performanceTracker: this.performanceTracker });
     const complexity = classifySuggestionComplexity(input, runtime.routing.complexityThreshold);
     const requestedTier = runtime.routing.enabled ? complexity.tier : undefined;
-    const providerOrder = requestedTier ? providerOrderForTier(runtime, requestedTier) : undefined;
+    const priorityProviderOrder = customerServiceReplyPriorityProviders(runtime);
+    const providerOrder = requestedTier
+      ? providerOrderForTier(runtime, requestedTier)
+      : uniqueStrings([...priorityProviderOrder, runtime.primary, ...runtime.fallbackChain]);
     const latencyBudgetMs = normalizedLatencyBudget(input.latencyBudgetMs);
     const messages = requestedTier === "economy" && latencyBudgetMs
       ? buildFastSuggestionMessages(input)
       : buildSuggestionMessages(input);
     const completionOptions: CompletionOptions = {
       providerOrder,
+      priorityProviderOrder,
       ...(latencyBudgetMs ? { deadlineAt: Date.now() + latencyBudgetMs, maxRetries: 0 } : {}),
     };
     const result = await router.complete(messages, completionOptions);
@@ -262,7 +365,8 @@ export class AiProviderService {
     const repaired = await router.complete(
       buildSuggestionRepairMessages(input, result.text, firstValidation.reason),
       {
-        providerOrder: repairTier ? providerOrderForTier(runtime, repairTier) : undefined,
+        providerOrder: repairTier ? providerOrderForTier(runtime, repairTier) : providerOrder,
+        priorityProviderOrder,
         ...(latencyBudgetMs ? { deadlineAt: Date.now() + latencyBudgetMs, maxRetries: 0 } : {}),
       },
     );
@@ -296,6 +400,7 @@ export class AiProviderService {
   async getStatus(probe = false) {
     const runtime = loadAiProviderRuntime();
     const router = new OpenAiCompatibleRouter(runtime, { performanceTracker: this.performanceTracker });
+    const observations = readProviderObservations(runtime);
     const providers = [];
     for (const provider of runtime.providers) {
       let live: Record<string, unknown> = { available: null };
@@ -320,6 +425,8 @@ export class AiProviderService {
         sharedSourceConfigured: provider.sharedSourceConfigured,
         issues: provider.issues,
         requestFormat: provider.requestFormat,
+        baseUrl: provider.baseUrl,
+        apiEndpoint: provider.apiEndpoint,
         model: provider.model,
         visionEnabled: provider.visionEnabled,
         visionModel: provider.visionEnabled ? provider.visionModel : "",
@@ -330,7 +437,12 @@ export class AiProviderService {
         routingTier: provider.routingTier,
         docsUrl: provider.docsUrl,
         keyOnlySetup: provider.keyOnlySetup,
+        balanceProbeSupported: Boolean(providerBalanceProbe(provider, runtime)),
+        balanceProbeLabel: providerBalanceProbeLabel(provider, runtime),
+        ...providerBillingMetadata(provider, runtime),
         performance: this.performanceTracker.snapshot(provider.name),
+        latestTest: observations.tests[provider.name] || null,
+        latestBalance: observations.balances[provider.name] || null,
         isPrimary: provider.name === runtime.primary,
         inFallbackChain: runtime.fallbackChain.includes(provider.name),
         inEconomyChain: runtime.routing.economyChain.includes(provider.name),
@@ -370,6 +482,7 @@ export class AiProviderService {
   async saveProviderCredential(input: {
     provider?: string;
     apiKey?: string;
+    baseUrl?: string;
     model?: string;
     enabled?: boolean;
   }) {
@@ -377,17 +490,41 @@ export class AiProviderService {
     if (!preset) throw new BadRequestException("不支持的模型供应商预设");
     const runtime = loadAiProviderRuntime();
     const current = runtime.providers.find((provider) => provider.name === preset.name);
+    if (current?.credentialSource === "zhenxi_ai_shared") {
+      if (input.apiKey !== undefined || input.baseUrl !== undefined || input.enabled !== undefined) {
+        throw new BadRequestException("共享配置的密钥、API 地址和启用状态请在臻希 AI 中维护");
+      }
+      const model = cleanCredentialValue(input.model, "模型名称", 200, false);
+      if (!model) throw new BadRequestException("请选择要设为当前的模型");
+      if (!current.sharedSourceConfigured || !current.sharedEnvPath || !current.sharedModelEnv) {
+        throw new BadRequestException("臻希 AI 共享模型配置不可写，请先检查共享配置文件");
+      }
+      persistPrivateEnvValues(current.sharedEnvPath, { [current.sharedModelEnv]: model });
+      const status = await this.getStatus(false);
+      return {
+        saved: true,
+        restartRequired: false,
+        provider: status.providers.find((provider) => provider.name === preset.name),
+        detail: `已将 ${model} 设为 ${preset.label} 当前模型；共享密钥和 API 地址未变更。`,
+      };
+    }
     const enabled = input.enabled !== false;
     const suppliedKey = cleanCredentialValue(input.apiKey, "API Key", 8_192, false);
     if (enabled && !suppliedKey && (!current || current.issues.includes("api_key_unset"))) {
       throw new BadRequestException("启用该供应商前请填写 API Key");
     }
-    const model = input.model === undefined || input.model === null || String(input.model).trim() === ""
-      ? preset.model
-      : cleanCredentialValue(input.model, "模型名称", 200, true);
+    const model = input.model === undefined || input.model === null
+      ? current?.model || preset.model
+      : cleanCredentialValue(input.model, "模型名称", 200, false);
+    const baseUrl = input.baseUrl === undefined || input.baseUrl === null
+      ? current?.baseUrl || preset.baseUrl
+      : cleanProviderBaseUrl(input.baseUrl);
+    if (enabled && !model) throw new BadRequestException("启用该供应商前请填写模型名称");
+    if (enabled && !baseUrl) throw new BadRequestException("启用该供应商前请填写 API 地址");
     const updates: Record<string, string> = {
       [preset.enabledEnv]: enabled ? "true" : "false",
       [preset.modelEnv]: model,
+      [providerBaseUrlEnv(preset)]: baseUrl,
     };
     if (suppliedKey) updates[preset.apiKeyEnv] = suppliedKey;
     persistPrivateEnvValues(runtime.envPath, updates);
@@ -401,6 +538,182 @@ export class AiProviderService {
         ? `${preset.label} 已启用并加入${preset.routingTier === "economy" ? "快速" : "高质量"}模型路由。`
         : `${preset.label} 已停用，已保存的密钥不会显示或写入日志。`,
     };
+  }
+
+  async saveProviderBillingCredential(input: {
+    provider?: string;
+    accessKeyId?: string;
+    accessKeySecret?: string;
+    adminKey?: string;
+  }) {
+    const providerName = String(input.provider || "").trim();
+    const runtime = loadAiProviderRuntime();
+    const updates: Record<string, string> = {};
+    let detail = "";
+    if (providerName === "dashscope") {
+      const accessKeyId = cleanCredentialValue(input.accessKeyId, "阿里云 AccessKey ID", 512, false);
+      const accessKeySecret = cleanCredentialValue(input.accessKeySecret, "阿里云 AccessKey Secret", 2_048, false);
+      if (!accessKeyId && !runtime.billingCredentials.alibabaCloudAccessKeyId) {
+        throw new BadRequestException("请填写阿里云 RAM AccessKey ID");
+      }
+      if (!accessKeySecret && !runtime.billingCredentials.alibabaCloudAccessKeySecret) {
+        throw new BadRequestException("请填写阿里云 RAM AccessKey Secret");
+      }
+      if (accessKeyId) updates.ALIBABA_CLOUD_ACCESS_KEY_ID = accessKeyId;
+      if (accessKeySecret) updates.ALIBABA_CLOUD_ACCESS_KEY_SECRET = accessKeySecret;
+      detail = "千问余额凭证已安全保存。余额查询将调用阿里云 BSS QueryAccountBalance，不会发送模型消息。";
+    } else if (providerName === "openai") {
+      const adminKey = cleanCredentialValue(input.adminKey, "OpenAI Admin Key", 8_192, false);
+      if (!adminKey && !runtime.billingCredentials.openAiAdminKey) {
+        throw new BadRequestException("请填写 OpenAI Admin Key；普通模型 API Key 不能查询组织费用");
+      }
+      if (adminKey) updates.OPENAI_ADMIN_KEY = adminKey;
+      detail = "OpenAI 费用凭证已安全保存。官方接口只返回组织消费，不返回充值余额。";
+    } else {
+      throw new BadRequestException("该供应商没有可配置的官方余额或费用查询凭证");
+    }
+    persistPrivateEnvValues(runtime.envPath, updates);
+    for (const [key, value] of Object.entries(updates)) process.env[key] = value;
+    const status = await this.getStatus(false);
+    return {
+      saved: true,
+      restartRequired: false,
+      provider: status.providers.find((provider) => provider.name === providerName),
+      detail,
+    };
+  }
+
+  generateServerEnvFile(): AiProviderServerEnvBundle {
+    const runtime = loadAiProviderRuntime();
+    const bundle = buildServerEnvBundle(runtime);
+    writePrivateTextFile(bundle.filePath, bundle.envText);
+    return bundle;
+  }
+
+  async getProviderBalance(providerName: string): Promise<AiProviderBalanceResult> {
+    const runtime = loadAiProviderRuntime();
+    const provider = runtime.providers.find((item) => item.name === String(providerName || "").trim());
+    if (!provider) throw new BadRequestException("不支持的模型供应商");
+    const result = !runtime.enabled
+      ? providerBalanceSkipped(provider, runtime, "AI 引擎未启用，未查询余额或费用。")
+      : !provider.enabled
+        ? providerBalanceSkipped(provider, runtime, "供应商已停用，未查询余额或费用。")
+        : !provider.configured
+          ? providerBalanceSkipped(provider, runtime, "供应商配置不完整，未查询余额或费用。")
+          : await queryProviderBalance(provider, runtime, Math.min(runtime.timeoutSeconds * 1_000, 8_000));
+    persistProviderObservation(runtime, provider.name, { balance: result });
+    return result;
+  }
+
+  async syncProviderModels(providerName: string): Promise<AiProviderModelSyncResult> {
+    const runtime = loadAiProviderRuntime();
+    const provider = runtime.providers.find((item) => item.name === String(providerName || "").trim());
+    if (!provider) throw new BadRequestException("不支持的模型供应商");
+    if (!provider.apiKey || provider.issues.includes("api_key_unset")) {
+      throw new BadRequestException("请先保存该供应商的 API Key，再获取模型列表");
+    }
+    if (!provider.baseUrl || provider.issues.includes("base_url_unset") || provider.issues.includes("base_url_invalid")) {
+      throw new BadRequestException("请先填写有效的 API 地址，再获取模型列表");
+    }
+
+    const endpoint = providerBaseEndpoint(provider, "/models");
+    let response: Response;
+    try {
+      response = await fetch(endpoint, {
+        method: "GET",
+        headers: providerModelListHeaders(provider),
+        signal: AbortSignal.timeout(Math.min(runtime.timeoutSeconds * 1_000, 8_000)),
+      });
+    } catch (error) {
+      throw new BadRequestException(`模型列表读取失败：${publicError(error)}`);
+    }
+
+    const body = await response.text();
+    if (body.length > 2_000_000) throw new BadRequestException("模型列表返回过大，已停止读取");
+    const payload = parseJsonText(body);
+    if (!response.ok) {
+      const detail = extractProviderErrorMessage(payload) || `HTTP ${response.status}`;
+      throw new BadRequestException(`模型列表读取失败：${cleanErrorText(detail)}`);
+    }
+    const models = extractProviderModels(payload);
+    if (!models.length) throw new BadRequestException("供应商没有返回可用模型，请检查 API 地址是否包含正确的版本路径");
+    return {
+      synced: true,
+      provider: provider.name,
+      label: provider.label,
+      source: "upstream",
+      endpoint,
+      fetchedAt: new Date().toISOString(),
+      models,
+    };
+  }
+
+  async testProviderResponse(providerName: string): Promise<AiProviderResponseTestResult> {
+    const runtime = loadAiProviderRuntime();
+    const provider = runtime.providers.find((item) => item.name === String(providerName || "").trim());
+    if (!provider) throw new BadRequestException("不支持的模型供应商");
+    const expectedReply = "客服连接测试通过";
+    const base = {
+      tested: true as const,
+      testedAt: new Date().toISOString(),
+      provider: provider.name,
+      label: provider.label,
+      model: provider.model,
+      enabled: provider.enabled,
+      configured: provider.configured,
+      testUrl: `/api/ai/providers/${encodeURIComponent(provider.name)}/test`,
+      requestKind: "chat_completion" as const,
+      expectedReply,
+    };
+    const finish = (result: AiProviderResponseTestResult) => {
+      persistProviderObservation(runtime, provider.name, { test: result, balance: result.balance });
+      return result;
+    };
+    const configurationOk = runtime.enabled && provider.enabled && provider.configured;
+    if (!configurationOk) {
+      return finish(buildProviderResponseTestResult({
+        ...base,
+        available: false,
+        latencyMs: 0,
+        responseText: "",
+        balance: providerBalanceSkipped(provider, runtime, !runtime.enabled ? "AI 引擎未启用，未查询余额或费用。" : "供应商配置不完整，未查询余额或费用。"),
+        error: [
+          !runtime.enabled ? "ai_engine_disabled" : "",
+          ...provider.issues,
+        ].filter(Boolean).join("; ") || "provider_not_configured",
+      }));
+    }
+
+    const router = new OpenAiCompatibleRouter(runtime, { performanceTracker: this.performanceTracker });
+    const startedAt = Date.now();
+    try {
+      const result = await router.completeWithProvider(
+        provider.name,
+        buildProviderResponseTestMessages(expectedReply),
+        0,
+        Math.min(runtime.timeoutSeconds * 1_000, 8_000),
+      );
+      const latencyMs = Date.now() - startedAt;
+      const balance = await queryProviderBalance(provider, runtime, Math.min(runtime.timeoutSeconds * 1_000, 8_000));
+      return finish(buildProviderResponseTestResult({
+        ...base,
+        available: true,
+        latencyMs,
+        responseText: result.text,
+        balance,
+      }));
+    } catch (error) {
+      const latencyMs = Date.now() - startedAt;
+      const balance = await queryProviderBalance(provider, runtime, Math.min(runtime.timeoutSeconds * 1_000, 8_000));
+      return finish(buildProviderResponseTestResult({
+        ...base,
+        available: false,
+        latencyMs,
+        responseText: "",
+        balance,
+        error: publicError(error),
+      }));
+    }
   }
 }
 
@@ -481,7 +794,14 @@ export function providerOrderForTier(runtime: AiProviderRuntimeConfig, tier: AiR
   const configuredQuality = runtime.providers
     .filter((provider) => provider.configured && provider.routingTier === "quality")
     .map((provider) => provider.name);
-  if (tier === "quality") return uniqueStrings([...runtime.routing.qualityChain, ...configuredQuality]);
+  if (tier === "quality") {
+    return uniqueStrings([
+      ...runtime.routing.qualityChain,
+      ...configuredQuality,
+      ...runtime.routing.economyChain,
+      ...configuredEconomy,
+    ]);
+  }
   // A simple request may safely upgrade when every economical provider is unavailable.
   return uniqueStrings([
     ...runtime.routing.economyChain,
@@ -489,6 +809,12 @@ export function providerOrderForTier(runtime: AiProviderRuntimeConfig, tier: AiR
     ...runtime.routing.qualityChain,
     ...configuredQuality,
   ]);
+}
+
+export function customerServiceReplyPriorityProviders(runtime: AiProviderRuntimeConfig) {
+  return CUSTOMER_SERVICE_REPLY_PRIORITY_PROVIDERS.filter((name) =>
+    runtime.providers.some((provider) => provider.name === name && provider.configured),
+  );
 }
 
 function withRoutingMetadata(
@@ -537,7 +863,7 @@ export class OpenAiCompatibleRouter {
     const eligibleProviders = requestedOrder.length
       ? requestedOrder.filter((name) => configured.has(name))
       : [...configured.keys()];
-    const adaptiveOrder = this.performanceTracker.order(this.runtime, eligibleProviders);
+    const adaptiveOrder = this.prioritizedAdaptiveOrder(eligibleProviders, options.priorityProviderOrder);
     const providers = adaptiveOrder.slice(
       0,
       options.deadlineAt ? MAX_DEADLINE_PROVIDER_CANDIDATES : MAX_STANDARD_PROVIDER_CANDIDATES,
@@ -604,6 +930,23 @@ export class OpenAiCompatibleRouter {
       }
     }
     throw lastError instanceof Error ? lastError : new Error("AI provider request failed");
+  }
+
+  private prioritizedAdaptiveOrder(eligibleProviders: string[], priorityProviderOrder?: string[]) {
+    const eligible = uniqueStrings(eligibleProviders);
+    const priority = uniqueStrings(priorityProviderOrder || []).filter((name) => eligible.includes(name));
+    if (!priority.length) return this.performanceTracker.order(this.runtime, eligible);
+
+    const priorityOrder = this.performanceTracker.order(this.runtime, priority);
+    const priorityAvailable = priorityOrder.filter(
+      (name) => this.performanceTracker.snapshot(name).circuitState !== "open",
+    );
+    const remaining = eligible.filter((name) => !priority.includes(name));
+    const fallbackOrder = this.performanceTracker.order(this.runtime, remaining);
+    const openPriority = priorityOrder.filter((name) =>
+      !priorityAvailable.includes(name) && !fallbackOrder.includes(name),
+    );
+    return uniqueStrings([...priorityAvailable, ...fallbackOrder, ...openPriority]);
   }
 
   async completeVision(input: AiVisionInput): Promise<AiCompletionResult> {
@@ -805,6 +1148,11 @@ export class OpenAiCompatibleRouter {
   }
 
   private async request(provider: AiProviderConfig, messages: ChatMessage[], timeoutMs?: number) {
+    if (!provider.visionEnabled && messages.some((message) => (
+      Array.isArray(message.content) && message.content.some((part) => part.type === "image_url")
+    ))) {
+      throw new Error(`Provider does not support image input: ${provider.name}`);
+    }
     const controller = new AbortController();
     const requestTimeoutMs = Math.max(
       25,
@@ -897,11 +1245,17 @@ function adaptiveProviderTimeoutMs(
       : null;
     const fallbackCanFit = fallbackExpected !== null
       && currentExpected + fallbackExpected + 400 <= remainingMs;
+    const currentIsMeasuredReliable = performance.averageLatencyMs !== null
+      && performance.successRate !== null
+      && performance.successRate > 0
+      && performance.consecutiveFailures === 0;
     const reserveForFallback = fallbackExpected === null
       ? 0
       : fallbackCanFit
         ? Math.min(Math.round(fallbackExpected + 250), Math.floor(remainingMs * 0.45))
-        : 300;
+        : currentIsMeasuredReliable
+          ? 300
+          : Math.max(1_200, Math.floor(remainingMs * 0.45));
     timeoutMs = Math.min(timeoutMs, Math.max(300, remainingMs - reserveForFallback));
   }
   return Math.max(25, Math.round(timeoutMs));
@@ -1007,6 +1361,9 @@ function openAiRequestBody(provider: AiProviderConfig, messages: ChatMessage[]) 
     messages,
     temperature: provider.temperature,
     max_tokens: provider.maxTokens,
+    ...(provider.name === "deepseek" && /^deepseek-v4-/i.test(provider.model)
+      ? { thinking: { type: "disabled" } }
+      : {}),
   };
 }
 
@@ -1036,6 +1393,21 @@ function cleanCredentialValue(value: unknown, label: string, maxLength: number, 
   if (cleaned.length > maxLength) throw new BadRequestException(`${label}长度超过限制`);
   if (/\r|\n|\0/.test(cleaned)) throw new BadRequestException(`${label}不能包含换行或空字符`);
   return cleaned;
+}
+
+function cleanProviderBaseUrl(value: unknown) {
+  const cleaned = cleanCredentialValue(value, "API 地址", 2_048, false);
+  if (!cleaned) return "";
+  let parsed: URL;
+  try {
+    parsed = new URL(cleaned);
+  } catch {
+    throw new BadRequestException("API 地址必须是完整的 http 或 https 地址");
+  }
+  if (!/^https?:$/.test(parsed.protocol)) throw new BadRequestException("API 地址只支持 http 或 https");
+  if (parsed.username || parsed.password) throw new BadRequestException("API 地址不能包含账号或密码");
+  if (parsed.search || parsed.hash) throw new BadRequestException("API 地址不能包含查询参数或锚点");
+  return trimTrailingSlash(cleaned);
 }
 
 function persistPrivateEnvValues(envPath: string, updates: Record<string, string>) {
@@ -1074,6 +1446,898 @@ function persistPrivateEnvValues(envPath: string, updates: Record<string, string
   } finally {
     try { fs.rmSync(temporaryPath, { force: true }); } catch {}
   }
+}
+
+function buildServerEnvBundle(runtime: AiProviderRuntimeConfig): AiProviderServerEnvBundle {
+  const generatedAt = new Date().toISOString();
+  const providers = runtime.providers.filter(
+    (provider) => provider.keyOnlySetup && provider.credentialSource === "environment" && provider.apiKeyEnv,
+  );
+  const missingProviders = providers
+    .filter((provider) => !provider.apiKey || provider.issues.includes("api_key_unset"))
+    .map((provider) => ({
+      name: provider.name,
+      label: provider.label,
+      apiKeyEnv: provider.apiKeyEnv,
+      enabledEnv: provider.enabledEnv,
+      modelEnv: provider.modelEnv,
+      baseUrlEnv: provider.baseUrlEnv,
+    }));
+  const includedProviders = providers.map((provider) => ({
+    name: provider.name,
+    label: provider.label,
+    enabled: provider.enabled,
+    apiKeyConfigured: Boolean(provider.apiKey && !provider.issues.includes("api_key_unset")),
+    apiKeyEnv: provider.apiKeyEnv,
+    modelEnv: provider.modelEnv,
+    baseUrlEnv: provider.baseUrlEnv,
+  }));
+  const lines = [
+    "# Smart Kefu server AI provider secrets",
+    `# Generated by the local backend at ${generatedAt}.`,
+    "# Copy this into the server runtime .env, keep it private, and never commit it.",
+    "# Empty API keys are placeholders for providers that have not been saved locally yet.",
+    "",
+    "# Official balance/cost query credentials (separate from model API keys)",
+    envLine("ALIBABA_CLOUD_ACCESS_KEY_ID", runtime.billingCredentials.alibabaCloudAccessKeyId),
+    envLine("ALIBABA_CLOUD_ACCESS_KEY_SECRET", runtime.billingCredentials.alibabaCloudAccessKeySecret),
+    envLine("OPENAI_ADMIN_KEY", runtime.billingCredentials.openAiAdminKey),
+    "",
+  ];
+  for (const provider of providers) {
+    lines.push(`# ${provider.label} (${provider.name})`);
+    lines.push(envLine(provider.enabledEnv, provider.enabled ? "true" : "false"));
+    lines.push(envLine(provider.baseUrlEnv, provider.baseUrl || ""));
+    lines.push(envLine(provider.modelEnv, provider.model || ""));
+    lines.push(envLine(provider.apiKeyEnv, provider.apiKey && !provider.issues.includes("api_key_unset") ? provider.apiKey : ""));
+    lines.push("");
+  }
+  return {
+    generated: true,
+    generatedAt,
+    filePath: resolveServerEnvExportPath(),
+    fileName: path.basename(resolveServerEnvExportPath()),
+    envText: `${lines.join("\n").replace(/\n+$/, "")}\n`,
+    providerCount: providers.length,
+    configuredProviderCount: includedProviders.filter((provider) => provider.apiKeyConfigured).length,
+    missingProviders,
+    includedProviders,
+    copyHint: "复制 envText 到服务器 .env 或部署平台的环境变量配置中；空值代表该供应商还没有在本机保存密钥。",
+  };
+}
+
+function emptyProviderObservations(): AiProviderObservations {
+  return {
+    schema: "smart_kefu_ai_provider_observations_v1",
+    updatedAt: null,
+    tests: {},
+    balances: {},
+  };
+}
+
+function resolveProviderObservationsPath(runtime: AiProviderRuntimeConfig) {
+  const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
+    ? path.resolve(process.env.DESKTOP_RUNTIME_DIR)
+    : path.join(path.dirname(runtime.envPath), ".runtime");
+  return path.join(runtimeDir, "ai-provider-observations.json");
+}
+
+function readProviderObservations(runtime: AiProviderRuntimeConfig): AiProviderObservations {
+  const fallback = emptyProviderObservations();
+  const target = resolveProviderObservationsPath(runtime);
+  try {
+    const stat = fs.lstatSync(target);
+    if (stat.isSymbolicLink() || !stat.isFile() || stat.size > 1_000_000) return fallback;
+    const parsed = asObjectRecord(parseJsonText(fs.readFileSync(target, "utf8")));
+    if (parsed.schema !== fallback.schema) return fallback;
+    const rawTests = asObjectRecord(parsed.tests);
+    const rawBalances = asObjectRecord(parsed.balances);
+    const tests: Record<string, AiProviderResponseTestResult> = {};
+    const balances: Record<string, AiProviderBalanceResult> = {};
+    for (const [provider, value] of Object.entries(rawTests)) {
+      if (safeObservationProviderName(provider) && isStoredProviderTest(provider, value)) tests[provider] = value;
+    }
+    for (const [provider, value] of Object.entries(rawBalances)) {
+      if (safeObservationProviderName(provider) && isStoredProviderBalance(value)) balances[provider] = value;
+    }
+    return {
+      schema: fallback.schema,
+      updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : null,
+      tests,
+      balances,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function persistProviderObservation(
+  runtime: AiProviderRuntimeConfig,
+  provider: string,
+  update: { test?: AiProviderResponseTestResult; balance?: AiProviderBalanceResult },
+) {
+  if (!safeObservationProviderName(provider)) return;
+  try {
+    const current = readProviderObservations(runtime);
+    const next: AiProviderObservations = {
+      schema: current.schema,
+      updatedAt: new Date().toISOString(),
+      tests: { ...current.tests },
+      balances: { ...current.balances },
+    };
+    if (update.test) next.tests[provider] = update.test;
+    if (update.balance) next.balances[provider] = update.balance;
+    writePrivateTextFile(resolveProviderObservationsPath(runtime), `${JSON.stringify(next, null, 2)}\n`);
+  } catch {
+    // The paid/read-only upstream result remains authoritative even if the local snapshot cannot be refreshed.
+  }
+}
+
+function safeObservationProviderName(value: string) {
+  return /^[a-z0-9][a-z0-9_.-]{0,79}$/.test(value);
+}
+
+function isStoredProviderTest(provider: string, value: unknown): value is AiProviderResponseTestResult {
+  const record = asObjectRecord(value);
+  return record.tested === true
+    && record.provider === provider
+    && typeof record.testedAt === "string"
+    && typeof record.model === "string"
+    && typeof record.available === "boolean"
+    && Number.isFinite(record.latencyMs)
+    && Number.isFinite(record.charactersPerSecond)
+    && isStoredProviderBalance(record.balance);
+}
+
+function isStoredProviderBalance(value: unknown): value is AiProviderBalanceResult {
+  const record = asObjectRecord(value);
+  return typeof record.checked === "boolean"
+    && typeof record.supported === "boolean"
+    && (record.metric === "balance" || record.metric === "cost")
+    && ["available", "insufficient", "unsupported", "error"].includes(String(record.status || ""))
+    && typeof record.display === "string"
+    && (record.amount === null || Number.isFinite(record.amount))
+    && (record.checkedAt === null || typeof record.checkedAt === "string");
+}
+
+function asObjectRecord(value: unknown): Record<string, any> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {};
+}
+
+function resolveServerEnvExportPath() {
+  const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
+    ? path.resolve(process.env.DESKTOP_RUNTIME_DIR)
+    : path.resolve(process.cwd(), ".runtime");
+  return path.join(runtimeDir, "server-ai-provider.env");
+}
+
+function envLine(name: string, value: string) {
+  return `${name}=${serializeEnvValue(value)}`;
+}
+
+function serializeEnvValue(value: string) {
+  const textValue = String(value || "");
+  if (!textValue) return "";
+  if (/^[A-Za-z0-9_./:@+=,\-]+$/.test(textValue)) return textValue;
+  return JSON.stringify(textValue);
+}
+
+function writePrivateTextFile(filePath: string, content: string) {
+  const target = path.resolve(filePath);
+  try {
+    const stat = fs.lstatSync(target);
+    if (stat.isSymbolicLink() || !stat.isFile()) throw new BadRequestException("服务器密钥导出文件不是安全的普通文件");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const temporaryPath = `${target}.${process.pid}.${crypto.randomBytes(8).toString("hex")}.tmp`;
+  try {
+    fs.writeFileSync(temporaryPath, content, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+    fs.renameSync(temporaryPath, target);
+    try { fs.chmodSync(target, 0o600); } catch {}
+  } finally {
+    try { fs.rmSync(temporaryPath, { force: true }); } catch {}
+  }
+}
+
+function buildProviderResponseTestMessages(expectedReply: string): ChatMessage[] {
+  return [
+    {
+      role: "system",
+      content: "你是客服系统连接测试器。只输出用户要求的固定中文短句，不要解释，不要加标点，不要输出多余文字。",
+    },
+    {
+      role: "user",
+      content: `回应连接测试：请只回复「${expectedReply}」。`,
+    },
+  ];
+}
+
+function buildProviderResponseTestResult(input: {
+  tested: true;
+  testedAt: string;
+  provider: string;
+  label: string;
+  model: string;
+  enabled: boolean;
+  configured: boolean;
+  testUrl: string;
+  requestKind: "chat_completion";
+  expectedReply: string;
+  available: boolean;
+  latencyMs: number;
+  responseText: string;
+  balance: AiProviderBalanceResult;
+  error?: string;
+}): AiProviderResponseTestResult {
+  const responsePreview = cleanModelText(input.responseText).slice(0, 120);
+  const normalizedExpected = input.expectedReply.replace(/\s+/g, "");
+  const normalizedResponse = responsePreview.replace(/\s+/g, "");
+  const outputCharacters = Array.from(responsePreview).length;
+  const latencySeconds = Math.max(0.001, input.latencyMs / 1_000);
+  const charactersPerSecond = input.available
+    ? Math.round(outputCharacters / latencySeconds)
+    : 0;
+  const replyMatched = Boolean(input.available && normalizedResponse.includes(normalizedExpected));
+  const speedOk = input.available;
+  return {
+    tested: true,
+    testedAt: input.testedAt,
+    provider: input.provider,
+    label: input.label,
+    model: input.model,
+    enabled: input.enabled,
+    configured: input.configured,
+    testUrl: input.testUrl,
+    requestKind: input.requestKind,
+    expectedReply: input.expectedReply,
+    available: input.available,
+    latencyMs: Math.max(0, Math.round(input.latencyMs)),
+    outputCharacters,
+    charactersPerSecond,
+    responsePreview,
+    replyMatched,
+    balance: input.balance,
+    checks: [
+      {
+        key: "configuration",
+        label: "配置检查",
+        ok: input.enabled && input.configured,
+        detail: input.enabled && input.configured ? "供应商已启用且密钥/模型完整" : "供应商未启用或配置不完整",
+      },
+      {
+        key: "connection",
+        label: "连接测试",
+        ok: input.available,
+        detail: input.available ? "上游接口已返回非空结果" : input.error || "上游接口未返回可用结果",
+      },
+      {
+        key: "response",
+        label: "回应测试",
+        ok: replyMatched,
+        detail: replyMatched ? `模型按要求返回「${input.expectedReply}」` : "模型返回内容与固定测试短句不一致",
+      },
+      {
+        key: "speed",
+        label: "速率测试",
+        ok: speedOk,
+        detail: speedOk ? `${Math.round(input.latencyMs)}ms，约 ${charactersPerSecond} 字/秒` : "未获得可计算的响应耗时",
+      },
+    ],
+    ...(input.error ? { error: input.error } : {}),
+  };
+}
+
+type ProviderBalanceProbe = {
+  source: string;
+  endpoint: string;
+  metric: "balance" | "cost";
+  request: () => { url: string; headers: Record<string, string> };
+  parse: (data: unknown, endpoint: string, checkedAt: string) => AiProviderBalanceResult;
+};
+
+async function queryProviderBalance(
+  provider: AiProviderConfig,
+  runtime: AiProviderRuntimeConfig,
+  timeoutMs: number,
+): Promise<AiProviderBalanceResult> {
+  const probe = providerBalanceProbe(provider, runtime);
+  if (!probe) return providerBalanceUnsupported(provider, runtime);
+  const checkedAt = new Date().toISOString();
+  const controller = new AbortController();
+  const requestTimeoutMs = Math.max(500, Math.min(Number(timeoutMs) || 3_000, 8_000));
+  const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+  try {
+    const request = probe.request();
+    const response = await fetch(request.url, {
+      method: "GET",
+      headers: request.headers,
+      signal: controller.signal,
+    });
+    const bodyText = await response.text();
+    const data = parseJsonObject(bodyText);
+    if (!response.ok) {
+      const error = providerBalanceHttpError(provider, response.status, data, bodyText, response.statusText);
+      return providerBalanceError(provider, probe.endpoint, checkedAt, error, probe.metric);
+    }
+    try {
+      return probe.parse(data, probe.endpoint, checkedAt);
+    } catch (error) {
+      return providerBalanceError(provider, probe.endpoint, checkedAt, publicError(error || "余额或费用返回格式不符合预期"), probe.metric);
+    }
+  } catch (error) {
+    const message = controller.signal.aborted ? "余额或费用查询超时" : publicError(error);
+    return providerBalanceError(provider, probe.endpoint, checkedAt, message, probe.metric);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function providerBalanceProbe(provider: AiProviderConfig, runtime: AiProviderRuntimeConfig): ProviderBalanceProbe | null {
+  const host = providerHost(provider.baseUrl);
+  if (provider.name === "deepseek" || host.includes("deepseek.com")) {
+    const endpoint = providerOriginEndpoint(provider, "/user/balance");
+    return {
+      source: "DeepSeek 余额接口",
+      endpoint,
+      metric: "balance",
+      request: () => bearerBalanceRequest(endpoint, provider.apiKey),
+      parse: parseDeepSeekBalance,
+    };
+  }
+  if (provider.name === "siliconflow" || host.includes("siliconflow.")) {
+    const endpoint = providerBaseEndpoint(provider, "/user/info");
+    return {
+      source: "硅基流动余额接口",
+      endpoint,
+      metric: "balance",
+      request: () => bearerBalanceRequest(endpoint, provider.apiKey),
+      parse: parseSiliconFlowBalance,
+    };
+  }
+  if (provider.name === "moonshot" || host.includes("moonshot.")) {
+    const endpoint = providerBaseEndpoint(provider, "/users/me/balance");
+    return {
+      source: "Kimi/Moonshot 余额接口",
+      endpoint,
+      metric: "balance",
+      request: () => bearerBalanceRequest(endpoint, provider.apiKey),
+      parse: parseMoonshotBalance,
+    };
+  }
+  if (provider.name === "openrouter" || host.includes("openrouter.ai")) {
+    const endpoint = providerBaseEndpoint(provider, "/credits");
+    return {
+      source: "OpenRouter Credits 接口",
+      endpoint,
+      metric: "balance",
+      request: () => bearerBalanceRequest(endpoint, provider.apiKey),
+      parse: parseOpenRouterCredits,
+    };
+  }
+  if ((provider.name === "dashscope" || host.includes("dashscope.aliyuncs.com"))
+    && runtime.billingCredentials.alibabaCloudAccessKeyId
+    && runtime.billingCredentials.alibabaCloudAccessKeySecret) {
+    const endpoint = "https://business.aliyuncs.com/";
+    return {
+      source: "阿里云 BSS QueryAccountBalance",
+      endpoint,
+      metric: "balance",
+      request: () => ({
+        url: buildAlibabaBssBalanceUrl(
+          runtime.billingCredentials.alibabaCloudAccessKeyId,
+          runtime.billingCredentials.alibabaCloudAccessKeySecret,
+        ),
+        headers: { Accept: "application/json" },
+      }),
+      parse: parseAlibabaBssBalance,
+    };
+  }
+  if ((provider.name === "openai" || host.includes("api.openai.com")) && runtime.billingCredentials.openAiAdminKey) {
+    const endpoint = "https://api.openai.com/v1/organization/costs";
+    return {
+      source: "OpenAI Organization Costs",
+      endpoint,
+      metric: "cost",
+      request: () => bearerBalanceRequest(buildOpenAiCurrentMonthCostsUrl(), runtime.billingCredentials.openAiAdminKey),
+      parse: parseOpenAiOrganizationCosts,
+    };
+  }
+  return null;
+}
+
+function providerBalanceProbeLabel(provider: AiProviderConfig, runtime: AiProviderRuntimeConfig) {
+  const probe = providerBalanceProbe(provider, runtime);
+  if (probe) return `可通过${probe.source}查询`;
+  return providerBalanceUnsupportedReason(provider, runtime);
+}
+
+function bearerBalanceRequest(url: string, apiKey: string) {
+  return {
+    url,
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+  };
+}
+
+function buildAlibabaBssBalanceUrl(
+  accessKeyId: string,
+  accessKeySecret: string,
+  now = new Date(),
+  nonce = crypto.randomUUID(),
+) {
+  const parameters: Record<string, string> = {
+    AccessKeyId: accessKeyId,
+    Action: "QueryAccountBalance",
+    Format: "JSON",
+    SignatureMethod: "HMAC-SHA1",
+    SignatureNonce: nonce,
+    SignatureVersion: "1.0",
+    Timestamp: now.toISOString().replace(/\.\d{3}Z$/, "Z"),
+    Version: "2017-12-14",
+  };
+  const canonical = Object.keys(parameters)
+    .sort()
+    .map((key) => `${aliRpcPercentEncode(key)}=${aliRpcPercentEncode(parameters[key])}`)
+    .join("&");
+  const stringToSign = `GET&${aliRpcPercentEncode("/")}&${aliRpcPercentEncode(canonical)}`;
+  const signature = crypto.createHmac("sha1", `${accessKeySecret}&`).update(stringToSign, "utf8").digest("base64");
+  return `https://business.aliyuncs.com/?${canonical}&Signature=${aliRpcPercentEncode(signature)}`;
+}
+
+function aliRpcPercentEncode(value: string) {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+function buildOpenAiCurrentMonthCostsUrl(now = new Date()) {
+  const monthStart = Math.floor(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1) / 1_000);
+  const endTime = Math.floor(now.getTime() / 1_000);
+  const query = new URLSearchParams({
+    start_time: String(monthStart),
+    end_time: String(endTime),
+    bucket_width: "1d",
+    limit: "31",
+  });
+  return `https://api.openai.com/v1/organization/costs?${query.toString()}`;
+}
+
+function providerBillingMetadata(provider: AiProviderConfig, runtime: AiProviderRuntimeConfig) {
+  const host = providerHost(provider.baseUrl);
+  if (provider.name === "dashscope" || host.includes("dashscope.aliyuncs.com")) {
+    return {
+      billingCredentialKind: "alibaba_bss" as const,
+      billingCredentialConfigured: Boolean(
+        runtime.billingCredentials.alibabaCloudAccessKeyId
+        && runtime.billingCredentials.alibabaCloudAccessKeySecret,
+      ),
+      billingQueryKind: "balance" as const,
+      billingConsoleUrl: "https://usercenter2.aliyun.com/",
+    };
+  }
+  if (provider.name === "openai" || host.includes("api.openai.com")) {
+    return {
+      billingCredentialKind: "openai_admin" as const,
+      billingCredentialConfigured: Boolean(runtime.billingCredentials.openAiAdminKey),
+      billingQueryKind: "cost" as const,
+      billingConsoleUrl: "https://platform.openai.com/settings/organization/usage",
+    };
+  }
+  if (provider.name === "zhipu" || host.includes("bigmodel.cn")) {
+    return {
+      billingCredentialKind: "console_only" as const,
+      billingCredentialConfigured: false,
+      billingQueryKind: "console_only" as const,
+      billingConsoleUrl: "https://bigmodel.cn/finance/expensebill/list",
+    };
+  }
+  return {
+    billingCredentialKind: "provider_api_key" as const,
+    billingCredentialConfigured: Boolean(providerBalanceProbeWithoutFinanceCredential(provider)),
+    billingQueryKind: "balance" as const,
+    billingConsoleUrl: provider.docsUrl || "",
+  };
+}
+
+function providerBalanceProbeWithoutFinanceCredential(provider: AiProviderConfig) {
+  const host = providerHost(provider.baseUrl);
+  return provider.name === "deepseek" || host.includes("deepseek.com")
+    || provider.name === "siliconflow" || host.includes("siliconflow.")
+    || provider.name === "moonshot" || host.includes("moonshot.")
+    || provider.name === "openrouter" || host.includes("openrouter.ai");
+}
+
+function parseDeepSeekBalance(data: unknown, endpoint: string, checkedAt: string): AiProviderBalanceResult {
+  const payload = objectValue(data);
+  const infos = Array.isArray(payload.balance_infos) ? payload.balance_infos.map(objectValue) : [];
+  const primary = infos.find((item) => text(item.currency).toUpperCase() === "CNY")
+    || infos.find((item) => text(item.currency).toUpperCase() === "USD")
+    || infos[0];
+  if (!primary) throw new Error("DeepSeek 余额返回中没有 balance_infos");
+  const currency = normalizedCurrency(primary.currency) || "CNY";
+  const amount = amountValue(primary.total_balance);
+  if (amount === null) throw new Error("DeepSeek 余额金额无法解析");
+  return buildBalanceAvailableResult({
+    endpoint,
+    checkedAt,
+    amount,
+    currency,
+    available: payload.is_available !== false && amount > 0,
+    displayLabel: "余额",
+    details: [
+      { label: "总余额", value: formatBalanceAmount(amount, currency) },
+      { label: "赠金", value: formatBalanceAmount(amountValue(primary.granted_balance), currency) },
+      { label: "充值余额", value: formatBalanceAmount(amountValue(primary.topped_up_balance), currency) },
+    ],
+  });
+}
+
+function parseSiliconFlowBalance(data: unknown, endpoint: string, checkedAt: string): AiProviderBalanceResult {
+  const wrapper = objectValue(data);
+  const payload = objectValue(wrapper.data || data);
+  const amount = amountValue(payload.totalBalance ?? payload.balance);
+  if (amount === null) throw new Error("硅基流动余额金额无法解析");
+  return buildBalanceAvailableResult({
+    endpoint,
+    checkedAt,
+    amount,
+    currency: "CNY",
+    available: amount > 0,
+    displayLabel: "余额",
+    details: [
+      { label: "总余额", value: formatBalanceAmount(amount, "CNY") },
+      { label: "赠送余额", value: formatBalanceAmount(amountValue(payload.balance), "CNY") },
+      { label: "充值余额", value: formatBalanceAmount(amountValue(payload.chargeBalance), "CNY") },
+      { label: "账号状态", value: text(payload.status) || "未知" },
+    ],
+  });
+}
+
+function parseMoonshotBalance(data: unknown, endpoint: string, checkedAt: string): AiProviderBalanceResult {
+  const wrapper = objectValue(data);
+  const payload = objectValue(wrapper.data);
+  const amount = amountValue(payload.available_balance);
+  if (amount === null) throw new Error("Kimi 余额金额无法解析");
+  return buildBalanceAvailableResult({
+    endpoint,
+    checkedAt,
+    amount,
+    currency: "CNY",
+    available: amount > 0,
+    displayLabel: "可用余额",
+    details: [
+      { label: "可用余额", value: formatBalanceAmount(amount, "CNY") },
+      { label: "代金券", value: formatBalanceAmount(amountValue(payload.voucher_balance), "CNY") },
+      { label: "现金余额", value: formatBalanceAmount(amountValue(payload.cash_balance), "CNY") },
+    ],
+  });
+}
+
+function parseOpenRouterCredits(data: unknown, endpoint: string, checkedAt: string): AiProviderBalanceResult {
+  const payload = objectValue(objectValue(data).data);
+  const totalCredits = amountValue(payload.total_credits);
+  const totalUsage = amountValue(payload.total_usage);
+  if (totalCredits === null || totalUsage === null) throw new Error("OpenRouter 额度金额无法解析");
+  const remaining = Math.max(0, totalCredits - totalUsage);
+  return buildBalanceAvailableResult({
+    endpoint,
+    checkedAt,
+    amount: remaining,
+    currency: "USD",
+    available: remaining > 0,
+    displayLabel: "剩余额度",
+    details: [
+      { label: "剩余额度", value: formatBalanceAmount(remaining, "USD") },
+      { label: "累计购买", value: formatBalanceAmount(totalCredits, "USD") },
+      { label: "累计使用", value: formatBalanceAmount(totalUsage, "USD") },
+    ],
+  });
+}
+
+function parseAlibabaBssBalance(data: unknown, endpoint: string, checkedAt: string): AiProviderBalanceResult {
+  const payload = objectValue(data);
+  if (payload.Success !== true || (text(payload.Code) && text(payload.Code) !== "200")) {
+    throw new Error(text(payload.Message) || text(payload.Code) || "阿里云 BSS 余额查询未成功");
+  }
+  const account = objectValue(payload.Data);
+  const amount = amountValue(account.AvailableAmount);
+  if (amount === null) throw new Error("阿里云 BSS 返回中没有可用额度");
+  const currency = normalizedCurrency(account.Currency) || "CNY";
+  return buildBalanceAvailableResult({
+    endpoint,
+    checkedAt,
+    amount,
+    currency,
+    available: amount > 0,
+    displayLabel: "可用额度",
+    details: [
+      { label: "可用额度", value: formatBalanceAmount(amount, currency) },
+      { label: "现金余额", value: formatBalanceAmount(amountValue(account.AvailableCashAmount), currency) },
+      { label: "信控额度", value: formatBalanceAmount(amountValue(account.CreditAmount), currency) },
+      { label: "网商银行信用额度", value: formatBalanceAmount(amountValue(account.MybankCreditAmount), currency) },
+    ],
+  });
+}
+
+function parseOpenAiOrganizationCosts(data: unknown, endpoint: string, checkedAt: string): AiProviderBalanceResult {
+  const payload = objectValue(data);
+  const buckets = Array.isArray(payload.data) ? payload.data.map(objectValue) : [];
+  const totals = new Map<string, number>();
+  for (const bucket of buckets) {
+    const results = Array.isArray(bucket.results) ? bucket.results.map(objectValue) : [];
+    for (const result of results) {
+      const amount = objectValue(result.amount);
+      const value = amountValue(amount.value);
+      if (value === null) continue;
+      const currency = normalizedCurrency(amount.currency) || "USD";
+      totals.set(currency, (totals.get(currency) || 0) + value);
+    }
+  }
+  const primaryCurrency = totals.has("USD") ? "USD" : [...totals.keys()][0] || "USD";
+  const total = totals.get(primaryCurrency) || 0;
+  const month = new Date(checkedAt).toLocaleDateString("zh-CN", { year: "numeric", month: "long", timeZone: "UTC" });
+  return buildBalanceAvailableResult({
+    endpoint,
+    checkedAt,
+    amount: total,
+    currency: primaryCurrency,
+    available: true,
+    displayLabel: "本月已消费",
+    metric: "cost",
+    details: [
+      { label: "统计周期", value: `${month}至今` },
+      { label: "费用合计", value: formatBalanceAmount(total, primaryCurrency) },
+      { label: "说明", value: "OpenAI 官方接口不返回充值后的剩余余额" },
+    ],
+  });
+}
+
+function buildBalanceAvailableResult(input: {
+  endpoint: string;
+  checkedAt: string;
+  amount: number;
+  currency: string;
+  available: boolean;
+  displayLabel: string;
+  metric?: "balance" | "cost";
+  details: Array<{ label: string; value: string }>;
+}): AiProviderBalanceResult {
+  return {
+    checked: true,
+    supported: true,
+    metric: input.metric || "balance",
+    status: input.available ? "available" : "insufficient",
+    display: `${input.displayLabel}：${formatBalanceAmount(input.amount, input.currency)}`,
+    amount: input.amount,
+    currency: input.currency,
+    endpoint: input.endpoint,
+    checkedAt: input.checkedAt,
+    details: input.details.filter((item) => item.value && item.value !== "未知"),
+  };
+}
+
+function providerBalanceSkipped(
+  provider: AiProviderConfig,
+  runtime: AiProviderRuntimeConfig,
+  reason: string,
+): AiProviderBalanceResult {
+  const probe = providerBalanceProbe(provider, runtime);
+  if (!probe) return providerBalanceUnsupported(provider, runtime);
+  return {
+    checked: false,
+    supported: true,
+    metric: probe.metric,
+    status: "error",
+    display: probe.metric === "cost" ? "费用：未查询" : "余额：未查询",
+    amount: null,
+    currency: null,
+    endpoint: probe.endpoint,
+    checkedAt: null,
+    details: [{ label: "原因", value: reason }],
+    error: reason,
+  };
+}
+
+function providerBalanceUnsupported(provider: AiProviderConfig, runtime: AiProviderRuntimeConfig): AiProviderBalanceResult {
+  const reason = providerBalanceUnsupportedReason(provider, runtime);
+  const metric = providerBillingMetadata(provider, runtime).billingQueryKind === "cost" ? "cost" : "balance";
+  return {
+    checked: false,
+    supported: false,
+    metric,
+    status: "unsupported",
+    display: metric === "cost" ? "费用：需要单独接入" : "余额：该供应商未接入查询",
+    amount: null,
+    currency: null,
+    endpoint: "",
+    checkedAt: null,
+    details: [{ label: "说明", value: reason }],
+  };
+}
+
+function providerBalanceError(
+  provider: AiProviderConfig,
+  endpoint: string,
+  checkedAt: string,
+  error: string,
+  metric: "balance" | "cost" = "balance",
+): AiProviderBalanceResult {
+  return {
+    checked: true,
+    supported: true,
+    metric,
+    status: "error",
+    display: metric === "cost" ? "费用：查询失败" : "余额：查询失败",
+    amount: null,
+    currency: null,
+    endpoint,
+    checkedAt,
+    details: [{ label: "错误", value: error || "余额或费用查询失败" }],
+    error: error || "余额或费用查询失败",
+  };
+}
+
+function providerBalanceHttpError(
+  provider: AiProviderConfig,
+  status: number,
+  data: unknown,
+  bodyText: string,
+  statusText: string,
+) {
+  if (provider.name === "openrouter" && status === 403) {
+    return "OpenRouter 余额查询需要 Management Key；当前 API Key 不能查询余额。";
+  }
+  if (provider.name === "openai" && (status === 401 || status === 403)) {
+    return "OpenAI 组织费用查询未获授权；请确认填写的是组织 Admin Key，而不是普通项目 API Key。";
+  }
+  if (provider.name === "dashscope" && (status === 400 || status === 401 || status === 403)) {
+    const detail = extractProviderErrorMessage(data);
+    return cleanErrorText(`阿里云 BSS 查询未获授权；请确认 RAM AccessKey 具备 AliyunBSSReadOnlyAccess。${detail ? ` ${detail}` : ""}`);
+  }
+  const detail = extractProviderErrorMessage(data) || bodyText || statusText || `HTTP ${status}`;
+  return cleanErrorText(`HTTP ${status}: ${detail}`);
+}
+
+function providerBaseEndpoint(provider: AiProviderConfig, endpoint: string) {
+  return `${trimTrailingSlash(provider.baseUrl)}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
+}
+
+function providerModelListHeaders(provider: AiProviderConfig): Record<string, string> {
+  if (provider.requestFormat === "anthropic") {
+    return {
+      accept: "application/json",
+      "anthropic-version": "2023-06-01",
+      "x-api-key": provider.apiKey,
+    };
+  }
+  return {
+    accept: "application/json",
+    authorization: `Bearer ${provider.apiKey}`,
+  };
+}
+
+function parseJsonText(value: string): unknown {
+  if (!String(value || "").trim()) return {};
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
+}
+
+function extractProviderModels(value: unknown): Array<{ id: string; label: string }> {
+  const payload = objectValue(value);
+  const rawModels = Array.isArray(payload.data)
+    ? payload.data
+    : Array.isArray(payload.models)
+      ? payload.models
+      : Array.isArray(value)
+        ? value
+        : [];
+  const byId = new Map<string, { id: string; label: string }>();
+  for (const rawModel of rawModels.slice(0, 2_000)) {
+    const record = objectValue(rawModel);
+    const sourceId = typeof rawModel === "string"
+      ? rawModel
+      : text(record.id || record.name || record.model || record.model_id);
+    const id = sourceId.replace(/^models\//i, "").trim();
+    if (!id || id.length > 200 || /[\r\n\0]/.test(id)) continue;
+    const displayName = text(record.display_name || record.displayName || record.label);
+    const label = (displayName || id).slice(0, 200);
+    if (!byId.has(id)) byId.set(id, { id, label });
+  }
+  return [...byId.values()]
+    .sort((left, right) => left.label.localeCompare(right.label, "zh-CN", { numeric: true }))
+    .slice(0, 500);
+}
+
+function providerOriginEndpoint(provider: AiProviderConfig, endpoint: string) {
+  try {
+    return `${new URL(provider.baseUrl).origin}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
+  } catch {
+    return providerBaseEndpoint(provider, endpoint);
+  }
+}
+
+function providerHost(baseUrl: string) {
+  try {
+    return new URL(baseUrl).host.toLowerCase();
+  } catch {
+    return String(baseUrl || "").toLowerCase();
+  }
+}
+
+function providerBalanceUnsupportedReason(provider: AiProviderConfig, runtime: AiProviderRuntimeConfig) {
+  const host = providerHost(provider.baseUrl);
+  if (provider.name === "dashscope" || host.includes("dashscope.aliyuncs.com")) {
+    return runtime.billingCredentials.alibabaCloudAccessKeyId || runtime.billingCredentials.alibabaCloudAccessKeySecret
+      ? "千问余额凭证不完整：需要同时填写阿里云 RAM AccessKey ID 和 AccessKey Secret，并授予 BSS 只读权限。"
+      : "千问模型 API Key 不能查余额；请另填阿里云 RAM AccessKey ID/Secret，并授予 AliyunBSSReadOnlyAccess。";
+  }
+  if (provider.name === "zhipu" || host.includes("bigmodel.cn")) {
+    return "智谱官方 API 文档未提供账户余额查询接口，请到智谱财务控制台查看账单和资源包。";
+  }
+  if (provider.name === "openai" || host.includes("api.openai.com")) {
+    return "OpenAI 普通模型 API Key 不能查询费用；另填组织 Admin Key 后可读取本月消费，但官方接口仍不返回充值后的剩余余额。";
+  }
+  if (provider.name === "gemini" || host.includes("generativelanguage.googleapis.com") || /^gemini/i.test(provider.model)) {
+    return "Gemini API 未提供已接入的余额查询接口，请到 Google AI Studio Billing 或 Usage 页面查看。";
+  }
+  return `${provider.label || provider.name} 未提供已接入的余额查询接口，请到供应商控制台查看。`;
+}
+
+function extractProviderErrorMessage(data: unknown): string {
+  const payload = objectValue(data);
+  const error = objectValue(payload.error);
+  return text(error.message) || text(error.type) || text(payload.message) || text(payload.error);
+}
+
+function parseJsonObject(value: string): unknown {
+  try {
+    return value ? JSON.parse(value) : {};
+  } catch {
+    return {};
+  }
+}
+
+function objectValue(value: unknown): Record<string, any> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, any>
+    : {};
+}
+
+function text(value: unknown) {
+  return String(value ?? "").trim();
+}
+
+function trimTrailingSlash(value: string) {
+  return String(value || "").replace(/\/+$/, "");
+}
+
+function amountValue(value: unknown): number | null {
+  const cleaned = String(value ?? "").replace(/[,\s￥¥$]/g, "");
+  if (!cleaned) return null;
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizedCurrency(value: unknown) {
+  const currency = text(value).toUpperCase();
+  return currency || null;
+}
+
+function formatBalanceAmount(amount: number | null, currency: string | null) {
+  if (amount === null) return "未知";
+  const formatted = amount.toFixed(2);
+  if (currency === "CNY") return `${formatted} 元`;
+  if (currency === "USD") return `$${formatted}`;
+  return currency ? `${formatted} ${currency}` : formatted;
 }
 
 function escapeRegExp(value: string) {

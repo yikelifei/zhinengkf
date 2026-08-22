@@ -1,0 +1,35 @@
+# Render __SMART_KEFU_RELAY_TOKEN__ to an independent 64-character hexadecimal
+# token before installing this block inside the HTTPS server for
+# kefu.zhenxiliye.cn. Never reuse callback, session, or internal API tokens.
+location ^~ /wecom-api/ {
+    limit_except GET POST {
+        deny all;
+    }
+
+    if ($http_x_smart_kefu_wechat_api_relay_token != "__SMART_KEFU_RELAY_TOKEN__") {
+        return 403;
+    }
+
+    # Official query strings contain corpsecret/access_token. They must not
+    # appear in the normal Nginx request log.
+    access_log off;
+    client_max_body_size 210m;
+
+    proxy_pass https://qyapi.weixin.qq.com/;
+    proxy_http_version 1.1;
+    proxy_ssl_server_name on;
+    proxy_ssl_name qyapi.weixin.qq.com;
+    proxy_set_header Host qyapi.weixin.qq.com;
+    proxy_set_header X-Smart-Kefu-Wechat-Api-Relay-Token "";
+    proxy_set_header X-Real-IP "";
+    proxy_set_header X-Forwarded-For "";
+    proxy_set_header X-Forwarded-Proto "";
+    proxy_set_header X-Forwarded-Host "";
+    proxy_request_buffering off;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_redirect off;
+    proxy_connect_timeout 10s;
+    proxy_send_timeout 5m;
+    proxy_read_timeout 5m;
+}

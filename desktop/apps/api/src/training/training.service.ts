@@ -366,7 +366,7 @@ export class TrainingService {
     return parsed;
   }
 
-  importKnowledge(payload: KnowledgeImportPayload) {
+  async importKnowledge(payload: KnowledgeImportPayload) {
     const parsed = parseKnowledgeImportText(payload.text || "");
     if (!parsed.ok || !parsed.rows.length) {
       const history = payload.operationKey
@@ -386,7 +386,7 @@ export class TrainingService {
     };
     const saved = appConfig.useLocalStore
       ? this.localStore.importKnowledgeEntries(parsed.rows, context)
-      : this.requirePrisma().importKnowledgeEntries(parsed.rows, context);
+      : await this.requirePrisma().importKnowledgeEntries(parsed.rows, context);
     return {
       ...parsed,
       saved,

@@ -104,6 +104,97 @@ test("client dispatches exactly four stable one-candidate slots concurrently", a
   assert.equal(new Set(seen.map((body) => body.prompt)).size, 4);
 });
 
+test("customer material generation completes four copy candidates before dispatching four image slots", async () => {
+  const client = new DesignPlatformClient();
+  const seen = [];
+  let activeImages = 0;
+  let maxActiveImages = 0;
+  client.http.post = async (_url, body) => {
+    seen.push(body);
+    if (body.type === "prompt") {
+      return {
+        status: 200,
+        data: { ok: true, data: { prompts: ["文案甲", "文案乙", "文案丙", "文案丁"] } },
+      };
+    }
+    activeImages += 1;
+    maxActiveImages = Math.max(maxActiveImages, activeImages);
+    await new Promise((resolve) => setImmediate(resolve));
+    activeImages -= 1;
+    const slot = Number(String(body.requestId).split(":").at(-1));
+    return {
+      status: 200,
+      data: { ok: true, data: { results: [{ status: "success", url: `/generated/material-${slot}.png` }] } },
+    };
+  };
+
+  const result = await client.executeArtImageLocalGeneration(materialPayload(), "material_copy_first_1");
+  assert.equal(result.status, "completed");
+  assert.equal(result.images.length, 4);
+  assert.equal(seen.length, 5);
+  assert.equal(seen[0].requestId, "material_copy_first_1:copy");
+  assert.equal(seen[0].type, "prompt");
+  assert.equal(seen[0].count, 4);
+  assert.equal(seen[0].cardType, "贺卡自定义模板");
+  assert.equal(seen[0].templateGroupKey, "card");
+  assert.equal(seen[0].category, "card");
+  assert.equal(seen[0].ratio, "1063x1535");
+  assert.deepEqual(seen.slice(1).map((body) => body.requestId), [1, 2, 3, 4].map((slot) => `material_copy_first_1:slot:${slot}`));
+  assert.ok(seen.slice(1).every((body) => body.type === "image" && body.count === 1));
+  assert.ok(seen.slice(1).every((body, index) => body.prompt.includes(["文案甲", "文案乙", "文案丙", "文案丁"][index])));
+  assert.equal(maxActiveImages, 4);
+});
+
+test("square greeting-card jobs send a 1:1 canvas through copy and all four image slots", async () => {
+  const client = new DesignPlatformClient();
+  const seen = [];
+  client.http.post = async (_url, body) => {
+    seen.push(body);
+    if (body.type === "prompt") {
+      return {
+        status: 200,
+        data: { ok: true, data: { prompts: ["方形文案甲", "方形文案乙", "方形文案丙", "方形文案丁"] } },
+      };
+    }
+    const slot = Number(String(body.requestId).split(":").at(-1));
+    return {
+      status: 200,
+      data: { ok: true, data: { results: [{ status: "success", url: `/generated/square-card-${slot}.png` }] } },
+    };
+  };
+  const payload = materialPayload();
+  payload.customerText = "制作一张正方形教师节贺卡";
+  payload.requirements.zhenxi.ratio = "1:1";
+  payload.requirements.zhenxi.canvasSize = "1:1";
+  payload.requirements.zhenxi.orientation = "square";
+
+  const result = await client.executeArtImageLocalGeneration(payload, "material_square_card_1");
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.images.length, 4);
+  assert.equal(seen.length, 5);
+  assert.ok(seen.every((body) => body.ratio === "1:1"));
+  assert.ok(seen.every((body) => body.cardType === "贺卡自定义模板"));
+});
+
+test("an incomplete copy stage blocks every paid image slot", async () => {
+  const client = new DesignPlatformClient();
+  const seen = [];
+  client.http.post = async (_url, body) => {
+    seen.push(body);
+    return {
+      status: 200,
+      data: { ok: true, data: { prompts: ["只有一条"] } },
+    };
+  };
+
+  const result = await client.executeArtImageLocalGeneration(materialPayload(), "material_copy_block_1");
+  assert.equal(result.status, "outcome_unknown");
+  assert.equal(result.errorCode, "MALFORMED_COPY_STAGE_RESPONSE");
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].type, "prompt");
+});
+
 test("one uncertain candidate slot blocks automatic retry after exactly four dispatched slots", async (t) => {
   const previousAdapter = appConfig.designPlatformAdapter;
   appConfig.designPlatformAdapter = "art_image_local";
@@ -1542,6 +1633,31 @@ function zhenxiContractAdapter(seen) {
       };
     }
     throw new Error(`unexpected Zhenxi contract request: ${method} ${config.url}`);
+  };
+}
+
+function materialPayload() {
+  return {
+    ...artPayload(),
+    designType: "zhenxi_image",
+    scene: "贺卡设计",
+    customerText: "制作一张竖版教师节贺卡",
+    requirements: {
+      useRealSkuImages: false,
+      zhenxi: {
+        deliverable: "greeting_card",
+        deliverableLabel: "贺卡",
+        capability: "贺卡设计",
+        prompt: "制作一张竖版教师节贺卡",
+        copyCount: 4,
+        outputCount: 4,
+        canvasSize: "1063x1535",
+        orientation: "vertical",
+        category: "card",
+        templateGroupKey: "card",
+        cardType: "贺卡自定义模板",
+      },
+    },
   };
 }
 

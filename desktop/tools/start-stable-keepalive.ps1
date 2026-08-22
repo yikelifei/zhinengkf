@@ -135,12 +135,28 @@ function Start-StableSupervisorProcess {
 `$env:STABLE_PERSONAL_WECHAT_SEND = "0"
 & "$PSCommandPath"
 "@
-  return Start-Process `
-    -FilePath "powershell.exe" `
-    -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $command) `
-    -WorkingDirectory $Root `
-    -WindowStyle Hidden `
-    -PassThru
+  $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+  $commandLine = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand $encodedCommand"
+  try {
+    # WMI owns this long-lived guard instead of the short-lived launcher process.
+    # That prevents a terminal/app/job teardown from taking customer reply services down with it.
+    $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+      CommandLine = $commandLine
+      CurrentDirectory = $Root
+    }
+    if ($created.ReturnValue -ne 0 -or [int]$created.ProcessId -le 0) {
+      throw "Win32_Process.Create failed returnValue=$($created.ReturnValue)"
+    }
+    return [pscustomobject]@{ Id = [int]$created.ProcessId; Durable = $true }
+  } catch {
+    Write-StableStartLog "durable supervisor handoff unavailable; using hidden process fallback: $($_.Exception.Message)"
+    return Start-Process `
+      -FilePath "powershell.exe" `
+      -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encodedCommand) `
+      -WorkingDirectory $Root `
+      -WindowStyle Hidden `
+      -PassThru
+  }
 }
 
 function Invoke-StableSupervisorLoop {

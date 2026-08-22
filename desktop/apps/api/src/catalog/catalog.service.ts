@@ -8,7 +8,7 @@ import { appConfig } from "../shared/app-config";
 import { assertDemoDataMutationAllowed } from "../shared/demo-data-boundary";
 import { createDemoPngBase64 } from "../shared/demo-png";
 import { StorageService } from "../storage/storage.service";
-import { BundleRecommendPayload, SkuBatchUpdatePayload, SkuPayload } from "./catalog.types";
+import { BundleRecommendPayload, SkuBatchUpdatePayload, SkuDeleteResult, SkuPayload } from "./catalog.types";
 import { rules } from "../shared/rules";
 
 const {
@@ -66,7 +66,11 @@ export class CatalogService {
   }
 
   async auditSkus() {
-    const skus = await this.listSkus();
+    // Audit the whole staged catalog, including records that are intentionally
+    // inactive while stock, sale price, or other operator-owned facts are
+    // awaiting confirmation.  Auditing only active SKUs made a fully imported
+    // staged catalog look indistinguishable from an empty database (0/0).
+    const skus = await this.listSkus({ includeInactive: true });
     const [auditSkus, changeLogs] = await Promise.all([
       Promise.all(skus.map((sku) => this.toAuditSku({
         ...sku,
@@ -77,7 +81,19 @@ export class CatalogService {
       }))),
       this.listSkuChangeLogsForDataReadiness(skus),
     ]);
-    return auditSkuCatalog(auditSkus, { includeDataReadiness: true, changeLogs });
+    const audit = auditSkuCatalog(auditSkus, { includeDataReadiness: true, changeLogs });
+    const activeSkus = auditSkus.filter((sku) => sku.isActive);
+    const activeAudit = auditSkuCatalog(activeSkus);
+    return {
+      ...audit,
+      activeCount: activeSkus.length,
+      inactiveCount: auditSkus.length - activeSkus.length,
+      stagedCount: auditSkus.length - activeSkus.length,
+      // A fully filled but deliberately inactive draft is not available to
+      // recommendation, quoting, or automation.  Keep it visible in the audit
+      // denominator without calling it ready for customer-facing work.
+      readyCount: activeAudit.readyCount,
+    };
   }
 
   private async listSkuChangeLogsForDataReadiness(skus: Array<{ skuCode?: string }>) {
@@ -251,6 +267,28 @@ export class CatalogService {
         reason: isActive ? "恢复商品" : "下架商品",
       });
       return updated;
+    });
+  }
+
+  async deleteSku(skuCode: string): Promise<SkuDeleteResult> {
+    const code = String(skuCode || "").trim();
+    if (!code) throw new BadRequestException("skuCode is required");
+    if (appConfig.useLocalStore) {
+      return this.localStore.deleteSku(code, { source: "manual_delete", operator: "客服工作台" });
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const current = await tx.sku.findUnique({ where: { skuCode: code } });
+      if (!current) throw new NotFoundException(`sku not found: ${code}`);
+      const removedAssets = await tx.designAsset.deleteMany({
+        where: { ownerType: "sku", ownerId: code },
+      });
+      await tx.skuChangeLog.deleteMany({ where: { skuCode: code } });
+      const deletedSku = await tx.sku.delete({ where: { skuCode: code } });
+      return {
+        deletedSku: this.toSkuPayload(deletedSku),
+        removedAssetCount: removedAssets.count,
+      };
     });
   }
 
@@ -745,7 +783,10 @@ export class CatalogService {
     if (!payload?.skuCode?.trim()) throw new BadRequestException("skuCode is required");
     if (!payload?.name?.trim()) throw new BadRequestException("name is required");
     if (!["gift_box", "item", "accessory"].includes(payload.type)) throw new BadRequestException("type is invalid");
-    if (!(Number(payload.salePrice) > 0)) throw new BadRequestException("salePrice must be greater than 0");
+    if (!(Number(payload.salePrice) >= 0)) throw new BadRequestException("salePrice must be greater than or equal to 0");
+    if (payload.isActive !== false && !(Number(payload.salePrice) > 0)) {
+      throw new BadRequestException("active SKU salePrice must be greater than 0");
+    }
     if (!(Number(payload.costPrice) >= 0)) throw new BadRequestException("costPrice must be greater than or equal to 0");
   }
 

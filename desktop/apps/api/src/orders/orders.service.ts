@@ -9,6 +9,7 @@ import {
   assertExactOperationReplay,
   createOperationFingerprint,
   deterministicOperationId,
+  InboundLeaseLostError,
   isUniqueConstraintError,
   normalizeOperationKey,
   readRequestOperationMetadata,
@@ -33,6 +34,21 @@ const {
 
 const AFTER_SALES_CREATE_DECISION = "after_sales_case_created";
 const AFTER_SALES_RESOLVE_DECISION = "after_sales_case_resolved";
+type InboundOrderCommitFence = {
+  operationId: string;
+  claimToken: string;
+  leaseExpiresAt: string;
+  operationResult?: Record<string, unknown>;
+  recoveryEffect: Record<string, unknown>;
+  orderBusinessFingerprint: string;
+  businessRiskControlsDisabled?: boolean;
+};
+
+type CreateFromQuoteOptions = {
+  inboundFence?: InboundOrderCommitFence;
+  notificationEffectKey?: string;
+  businessRiskControlsDisabled?: boolean;
+};
 
 @Injectable()
 export class OrdersService {
@@ -95,6 +111,81 @@ export class OrdersService {
     assertExpectedIdentity(order, expected, "order draft");
     const logs = await this.listAfterSalesReviewLogs(id);
     return buildAfterSalesCasesFromLogs(logs, order);
+  }
+
+  /**
+   * Read-only refund eligibility snapshot for the controlled Agent tool.
+   *
+   * This deliberately reuses the same payment-ledger calculation that the
+   * existing after-sales write path uses. The Agent only receives a snapshot;
+   * it cannot create a case or write a payment event through this method.
+   */
+  async refundEligibility(id: string, expected: ExpectedIdentityPayload = {}) {
+    const order = await this.getOrderDraft(id);
+    if (!order) throw new BadRequestException(`没有找到订单草稿：${id}`);
+    assertExpectedIdentity(order, expected, "order draft");
+    const paymentSummary = await this.afterSalesPaymentSummary(order);
+    const cases = await this.listAfterSalesCases(id, expected);
+    const openCaseCount = cases.filter((item: any) => String(item?.status || "") === "open").length;
+    const blockers = paymentSummary.refundableAmountCny > 0
+      ? []
+      : ["没有可核验的可退款金额"];
+    return {
+      orderDraftId: id,
+      identity: {
+        wechatAccountId: order.wechatAccountId,
+        conversationId: order.conversationId,
+        customerId: order.customerId,
+      },
+      paymentSummary,
+      openCaseCount,
+      eligible: blockers.length === 0,
+      requiresManualReview: true,
+      blockers,
+      policySource: "orders.afterSalesPaymentSummary",
+    };
+  }
+
+  /**
+   * Validate an after-sales request without creating a case or payment event.
+   * The write path below intentionally repeats these same business checks;
+   * this preview exists so an Agent can show the facts before approval.
+   */
+  async afterSalesCasePreview(id: string, payload: AfterSalesCreatePatch & ExpectedIdentityPayload = {}) {
+    const current = await this.getOrderDraft(id);
+    if (!current) throw new BadRequestException(`没有找到订单草稿：${id}`);
+    assertExpectedIdentity(current, payload, "order draft");
+    const type = normalizeAfterSalesType(payload.type);
+    const reason = cleanAfterSalesText(payload.reason, 800);
+    if (!reason) throw new BadRequestException("退款预览必须填写客户问题、证据或处理原因。");
+    const requestedAmountCny = normalizeAfterSalesAmount(payload.requestedAmountCny);
+    if (["refund", "compensation"].includes(type) && (requestedAmountCny === null || requestedAmountCny <= 0)) {
+      throw new BadRequestException("退款或补偿预览必须填写大于 0 的申请金额。");
+    }
+    const paymentSummary = await this.afterSalesPaymentSummary(current);
+    if (requestedAmountCny !== null && requestedAmountCny > paymentSummary.refundableAmountCny + 0.0001) {
+      throw new BadRequestException(`退款预览金额超过可退金额：可退 ${paymentSummary.refundableAmountCny} 元。`);
+    }
+    return {
+      phase: "preview",
+      noWrite: true,
+      orderDraftId: id,
+      identity: {
+        wechatAccountId: current.wechatAccountId,
+        conversationId: current.conversationId,
+        customerId: current.customerId,
+      },
+      request: {
+        type,
+        reason,
+        requestedAmountCny,
+        evidenceReference: cleanAfterSalesText(payload.evidenceReference, 300),
+        desiredResolution: cleanAfterSalesText(payload.desiredResolution, 500),
+      },
+      paymentSummary,
+      requiresHumanReview: true,
+      policySource: "orders.createAfterSalesCase",
+    };
   }
 
   async createAfterSalesCase(id: string, payload: AfterSalesCreatePatch & ExpectedIdentityPayload = {}) {
@@ -314,7 +405,11 @@ export class OrdersService {
     return (await this.listAfterSalesCases(id, payload)).find((item: any) => item.id === caseId);
   }
 
-  async createFromQuote(quoteId: string, expected: ExpectedIdentityPayload = {}) {
+  async createFromQuote(
+    quoteId: string,
+    expected: ExpectedIdentityPayload = {},
+    options: CreateFromQuoteOptions = {},
+  ) {
     const quote = await this.getQuote(quoteId);
     if (!quote) throw new BadRequestException(`没有找到报价草稿：${quoteId}`);
     assertExpectedIdentity(quote, expected, "quote draft");
@@ -324,18 +419,21 @@ export class OrdersService {
       const missing = decision.missing?.length ? `，缺少：${decision.missing.map(orderDraftMissingLabel).join("、")}` : "";
       throw new BadRequestException(`报价还不能生成订单草稿：${orderDraftDecisionReasonLabel(decision.reason)}${missing}`);
     }
-    await this.assertQuotePaymentLedgerForOrderCreation(quote, decision.orderDraft);
+    await this.assertQuotePaymentLedgerForOrderCreation(quote, decision.orderDraft, options);
 
     const orderDraft = appConfig.useLocalStore
       ? this.localStore.upsertOrderDraftFromQuote(quoteId, decision.orderDraft)
-      : await this.upsertPrismaOrderDraft(quoteId, decision.orderDraft);
+      : options.inboundFence
+        ? await this.upsertPrismaOrderDraftWithInboundFence(quoteId, expected, options.inboundFence)
+        : await this.upsertPrismaOrderDraft(quoteId, decision.orderDraft);
     this.assertCreatedOrderDraftBinding(orderDraft, quote);
 
     await this.notifications.create(
       "info",
       "订单草稿已生成",
-      `客户 ${quote.customer?.name || quote.customerId} 的报价已生成订单草稿，金额 ${decision.orderDraft.totalPrice} 元。`,
+      `报价 ${quoteId} 已生成订单草稿 ${orderDraft.id}，金额 ${orderDraft.totalPrice} 元。`,
       {
+        effectKey: options.notificationEffectKey || `order-draft:${quoteId}:created`,
         orderDraftId: orderDraft.id,
         quoteDraftId: quoteId,
         designJobId: quote.designJobId,
@@ -1035,10 +1133,17 @@ export class OrdersService {
     return (this.prisma as any).quoteDraft.update({ where: { id }, data: patch });
   }
 
-  private async assertQuotePaymentLedgerForOrderCreation(quote: any, orderDraft: any) {
+  private async assertQuotePaymentLedgerForOrderCreation(
+    quote: any,
+    orderDraft: any,
+    options: { businessRiskControlsDisabled?: boolean } = {},
+  ) {
+    if (options.businessRiskControlsDisabled === true) return;
     const paymentStatus = String(orderDraft?.paymentStatus || quote?.paymentStatus || "unpaid");
     if (paymentStatus === "unpaid") return;
-    const paymentEvents = await this.listPaymentEventsForQuote(quote?.id);
+    const paymentEvents = Array.isArray(quote?.paymentEvents)
+      ? quote.paymentEvents
+      : await this.listPaymentEventsForQuote(quote?.id);
     const verifiedAmount = sumVerifiedPaymentEvents(paymentEvents);
     if (verifiedAmount <= 0) {
       throw new BadRequestException("报价付款状态缺少已核验付款流水，不能生成已付款订单；请先从报价页核验付款凭证。");
@@ -1373,8 +1478,8 @@ export class OrdersService {
     });
   }
 
-  private async upsertPrismaOrderDraft(quoteId: string, draft: any) {
-    const data = {
+  private prismaOrderDraftData(draft: any) {
+    return {
       designJobId: draft.designJobId,
       customerId: draft.customerId,
       conversationId: draft.conversationId,
@@ -1398,16 +1503,140 @@ export class OrdersService {
       bundleSnapshot: draft.bundleSnapshot || {},
       selectedImageSnapshot: draft.selectedImageSnapshot || {},
     };
-    return (this.prisma as any).orderDraft.upsert({
+  }
+
+  private upsertPrismaOrderDraftWithClient(client: any, quoteId: string, draft: any) {
+    const data = this.prismaOrderDraftData(draft);
+    return client.orderDraft.upsert({
       where: { quoteDraftId: quoteId },
       create: {
         quoteDraftId: quoteId,
         ...data,
       },
-      update: data,
+      update: {},
       include: this.orderInclude(),
+    }).then((orderDraft: any) => {
+      if (createOrderDraftBusinessFingerprint(orderDraft) !== createOrderDraftBusinessFingerprint(draft)) {
+        throw new BadRequestException("existing order draft does not match the accepted quote; refusing to overwrite it");
+      }
+      return orderDraft;
     });
   }
+
+  private async upsertPrismaOrderDraftWithInboundFence(
+    quoteId: string,
+    expected: ExpectedIdentityPayload,
+    fence: InboundOrderCommitFence,
+  ) {
+    const prisma = this.prisma as any;
+    return prisma.$transaction(async (tx: any) => {
+      const leaseExpiresAt = new Date(fence.leaseExpiresAt);
+      const fenced = await tx.inboundMessageOperation.updateMany({
+        where: {
+          id: fence.operationId,
+          status: "processing",
+          claimToken: fence.claimToken,
+          leaseExpiresAt: { gt: new Date() },
+        },
+        data: { leaseExpiresAt },
+      });
+      if (fenced.count !== 1) {
+        throw new InboundLeaseLostError("inbound operation lease changed before order draft commit");
+      }
+
+      const quoteLock = await tx.quoteDraft.updateMany({
+        where: { id: quoteId },
+        data: { updatedAt: new Date() },
+      });
+      if (quoteLock.count !== 1) {
+        throw new BadRequestException("quote changed before fenced order draft commit");
+      }
+
+      const quote = await tx.quoteDraft.findUnique({
+        where: { id: quoteId },
+        include: {
+          customer: true,
+          selectedImage: true,
+          designJob: {
+            include: {
+              conversation: true,
+              wechatAccount: true,
+              images: true,
+            },
+          },
+          paymentEvents: {
+            orderBy: { createdAt: "desc" },
+            take: 20,
+          },
+        },
+      });
+      if (!quote) throw new BadRequestException(`没有找到报价草稿：${quoteId}`);
+      assertExpectedIdentity(quote, expected, "quote draft");
+      const decision = buildOrderDraftFromQuote(quote);
+      if (!decision.ok) {
+        throw new BadRequestException("quote state changed before fenced order draft commit");
+      }
+      const orderBusinessFingerprint = createOrderDraftBusinessFingerprint(decision.orderDraft);
+      if (!fence.orderBusinessFingerprint || fence.orderBusinessFingerprint !== orderBusinessFingerprint) {
+        throw new BadRequestException("accepted quote business fields changed before order draft commit");
+      }
+      await this.assertQuotePaymentLedgerForOrderCreation(quote, decision.orderDraft, {
+        businessRiskControlsDisabled: fence.businessRiskControlsDisabled === true,
+      });
+      const orderDraft = await this.upsertPrismaOrderDraftWithClient(tx, quoteId, decision.orderDraft);
+      this.assertCreatedOrderDraftBinding(orderDraft, quote);
+
+      const committed = await tx.inboundMessageOperation.updateMany({
+        where: {
+          id: fence.operationId,
+          status: "processing",
+          claimToken: fence.claimToken,
+          leaseExpiresAt: { gt: new Date() },
+        },
+        data: {
+          result: {
+            ...(fence.operationResult || {}),
+            recoveryEffect: {
+              ...fence.recoveryEffect,
+              phase: "quote_and_order_committed",
+              orderDraftId: orderDraft.id,
+            },
+          },
+          leaseExpiresAt,
+        },
+      });
+      if (committed.count !== 1) {
+        throw new InboundLeaseLostError("inbound operation lease changed during order draft commit");
+      }
+      return orderDraft;
+    });
+  }
+
+  private async upsertPrismaOrderDraft(quoteId: string, draft: any) {
+    return this.upsertPrismaOrderDraftWithClient(this.prisma as any, quoteId, draft);
+  }
+}
+
+export function createOrderDraftBusinessFingerprint(draft: any) {
+  return createOperationFingerprint(
+    "order-draft-business-v1",
+    {
+      designJobId: String(draft?.designJobId || ""),
+      customerId: String(draft?.customerId || ""),
+      conversationId: String(draft?.conversationId || ""),
+      wechatAccountId: String(draft?.wechatAccountId || ""),
+      selectedImageId: String(draft?.selectedImageId || ""),
+    },
+    {
+      quantity: Number(draft?.quantity || 0),
+      unitPrice: String(draft?.unitPrice ?? ""),
+      totalPrice: String(draft?.totalPrice ?? ""),
+      totalCost: String(draft?.totalCost ?? ""),
+      profit: String(draft?.profit ?? ""),
+      bundleSnapshot: draft?.bundleSnapshot || {},
+      selectedImageSnapshot: draft?.selectedImageSnapshot || {},
+    },
+  );
 }
 
 function orderSendTaskLabel(label: string) {

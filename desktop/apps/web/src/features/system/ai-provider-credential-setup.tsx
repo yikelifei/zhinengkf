@@ -1,5 +1,4 @@
-import { KeyRound } from "lucide-react";
-import { useState } from "react";
+import { KeyRound, Power } from "lucide-react";
 import type { AiProviderStatus } from "../../lib/api";
 import styles from "../governance-pages.module.css";
 
@@ -11,6 +10,7 @@ export function AiProviderCredentialSetup({
   savingProvider,
   onKeyChange,
   onSave,
+  onEnableAllSaved,
   configurationTrusted,
 }: {
   providers: Provider[];
@@ -18,9 +18,11 @@ export function AiProviderCredentialSetup({
   savingProvider: string;
   onKeyChange: (provider: string, value: string) => void;
   onSave: (provider: Provider, enabled: boolean) => void;
+  onEnableAllSaved: () => void;
   configurationTrusted: boolean;
 }) {
-  const [pendingChange, setPendingChange] = useState<{ provider: Provider; enabled: boolean } | null>(null);
+  const savingAll = savingProvider === "__all__";
+  const savedDisabledProviders = providers.filter((provider) => provider.apiKeyConfigured && !provider.enabled);
   return (
     <section className={styles.panel} aria-labelledby="ai-models-quick-connect-title">
       <header className={styles.panelHeader}>
@@ -28,7 +30,19 @@ export function AiProviderCredentialSetup({
           <h2 id="ai-models-quick-connect-title">只填密钥，立即接入</h2>
           <p>接口地址、请求协议、默认模型和快速/高质量路由都已预置。密钥只保存在本机私有配置文件中，页面和日志都不会回显。</p>
         </div>
-        <span className={`${styles.badge} ${styles.toneMuted}`}>{providers.length} 个供应商预设</span>
+        <div className={styles.buttonRow}>
+          <span className={`${styles.badge} ${styles.toneMuted}`}>{providers.length} 个供应商预设</span>
+          <button
+            type="button"
+            className={styles.primaryButton}
+            data-action-id="ai-models-provider-enable-all-saved"
+            onClick={() => onEnableAllSaved()}
+            disabled={!configurationTrusted || savingAll || savedDisabledProviders.length === 0}
+          >
+            <Power size={16} aria-hidden="true" />
+            {savingAll ? "正在启用" : "启用全部已保存"}
+          </button>
+        </div>
       </header>
       <div className={styles.panelBody}>
         <div className={styles.recordList}>
@@ -67,10 +81,10 @@ export function AiProviderCredentialSetup({
                 <button
                   type="button"
                   className={styles.primaryButton}
-                  data-action-id={`ai-models-provider-${provider.name}-save`}
-                  onClick={() => onSave(provider, provider.enabled)}
-                  disabled={!configurationTrusted || savingProvider === provider.name || (!provider.apiKeyConfigured && !keyDrafts[provider.name]?.trim())}
-                >
+                    data-action-id={`ai-models-provider-${provider.name}-save`}
+                    onClick={() => onSave(provider, provider.enabled)}
+                    disabled={!configurationTrusted || savingAll || savingProvider === provider.name || (!provider.apiKeyConfigured && !keyDrafts[provider.name]?.trim())}
+                  >
                   <KeyRound size={16} aria-hidden="true" />
                   {savingProvider === provider.name ? "正在保存" : provider.apiKeyConfigured ? "更新密钥" : "仅保存密钥"}
                 </button>
@@ -79,37 +93,25 @@ export function AiProviderCredentialSetup({
                     type="button"
                     className={styles.dangerButton}
                     data-action-id={`ai-models-provider-${provider.name}-disable`}
-                    onClick={() => setPendingChange({ provider, enabled: false })}
-                    disabled={!configurationTrusted || savingProvider === provider.name}
+                    onClick={() => onSave(provider, false)}
+                    disabled={!configurationTrusted || savingAll || savingProvider === provider.name}
                   >
-                    请求停用
+                    停用
                   </button>
                 ) : provider.apiKeyConfigured ? (
                   <button
                     type="button"
                     className={styles.button}
-                    data-action-id={`ai-models-provider-${provider.name}-enable-request`}
-                    onClick={() => setPendingChange({ provider, enabled: true })}
-                    disabled={!configurationTrusted || savingProvider === provider.name}
-                  >请求启用</button>
+                    data-action-id={`ai-models-provider-${provider.name}-enable`}
+                    onClick={() => onSave(provider, true)}
+                    disabled={!configurationTrusted || savingAll || savingProvider === provider.name}
+                  >启用</button>
                 ) : null}
                 {provider.docsUrl ? <a className={styles.button} href={provider.docsUrl} target="_blank" rel="noreferrer">获取密钥</a> : null}
               </div>
             </article>
           ))}
         </div>
-        {pendingChange ? (
-          <section className={styles.confirmation} role="region" aria-live="polite" aria-labelledby="ai-provider-change-confirm-title">
-            <strong id="ai-provider-change-confirm-title">确认{pendingChange.enabled ? "启用" : "停用"} {pendingChange.provider.label || pendingChange.provider.name}</strong>
-            <p>{pendingChange.enabled
-              ? "启用后该供应商会进入既有模型路由并可能承接真实请求；本操作不执行探活，但会改变后续流量去向。"
-              : "停用后该供应商不会再承接新请求；正在进行或已经提交的上游请求不会被撤销。"}</p>
-            <div className={styles.buttonRow}>
-              <button type="button" className={pendingChange.enabled ? styles.primaryButton : styles.dangerButton} data-action-id={`ai-models-provider-${pendingChange.provider.name}-${pendingChange.enabled ? "enable" : "disable"}-confirm`} disabled={!configurationTrusted || savingProvider === pendingChange.provider.name} onClick={() => { if (!configurationTrusted) return; onSave(pendingChange.provider, pendingChange.enabled); setPendingChange(null); }}>确认{pendingChange.enabled ? "启用" : "停用"}</button>
-              <button type="button" className={styles.button} data-action-id="ai-models-provider-change-cancel" onClick={() => setPendingChange(null)}>取消</button>
-            </div>
-          </section>
-        ) : null}
       </div>
     </section>
   );

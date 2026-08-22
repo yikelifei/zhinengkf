@@ -5,16 +5,17 @@ const { isHighValueBudget } = require("./budget");
 
 function evaluateLowValueDesignImageSend(job = {}, options = {}) {
   if (!job || !job.id) return skip("invalid_job", ["job"]);
+  const businessRiskDisabled = options.businessRiskControlsDisabled === true;
   const highValueAmount = Number(options.highValueAmountCny || 10000);
-  if (job.isHighValue || isHighValueBudget(job.budget, highValueAmount)) {
+  if (!businessRiskDisabled && (job.isHighValue || isHighValueBudget(job.budget, highValueAmount))) {
     return skip("manual_review_required", ["manualReview"]);
   }
   if (job.status !== "quick_confirm") return skip("status_not_ready", ["status"]);
-  if (job.conversation?.manualLocked || job.manualLocked) return skip("conversation_manual_locked", ["manualLocked"]);
+  if (!businessRiskDisabled && (job.conversation?.manualLocked || job.manualLocked)) return skip("conversation_manual_locked", ["manualLocked"]);
   if (!job.wechatAccountId || !job.conversationId) {
     return skip("missing_send_target", ["wechatAccountId", "conversationId"]);
   }
-  if (String(job.designType || "") !== "zhenxi_image") {
+  if (!businessRiskDisabled && String(job.designType || "") !== "zhenxi_image") {
     const automation = inspectBundleAutomationReadiness(job.bundle || {});
     if (!automation.ok) return skip(automation.reason, automation.blockers || []);
   }
@@ -40,6 +41,7 @@ function evaluateLowValueDesignImageSend(job = {}, options = {}) {
 function evaluateLowValueQuoteSend(quote = {}, options = {}) {
   if (!quote || !quote.id) return skip("invalid_quote", ["quote"]);
   const designJob = quote.designJob || {};
+  const businessRiskDisabled = options.businessRiskControlsDisabled === true;
   const highValueAmount = Number(options.highValueAmountCny || 10000);
   const totalPrice = Number(quote.totalPrice || 0);
   const unitPrice = Number(quote.unitPrice || 0);
@@ -48,19 +50,21 @@ function evaluateLowValueQuoteSend(quote = {}, options = {}) {
   if (quote.sendTaskId) return skip("already_queued", ["sendTaskId"]);
   if (quote.status !== "auto_sent") return skip("status_not_ready", ["status"]);
   if (!quote.selectedImageId) return skip("missing_selected_image", ["selectedImageId"]);
-  if (Number.isFinite(profit) && profit < 0) return skip("negative_profit", ["profit"]);
+  if (!businessRiskDisabled && Number.isFinite(profit) && profit < 0) return skip("negative_profit", ["profit"]);
   if (!designJob || !designJob.id) return skip("missing_design_job", ["designJob"]);
-  if (isHighValueAmount({ totalPrice, unitPrice, highValueAmount }) || isHighValueDesignJob(designJob, highValueAmount)) {
+  if (!businessRiskDisabled && (isHighValueAmount({ totalPrice, unitPrice, highValueAmount }) || isHighValueDesignJob(designJob, highValueAmount))) {
     return skip("manual_review_required", ["manualReview"]);
   }
-  if (designJob.conversation?.manualLocked || designJob.manualLocked) {
+  if (!businessRiskDisabled && (designJob.conversation?.manualLocked || designJob.manualLocked)) {
     return skip("conversation_manual_locked", ["manualLocked"]);
   }
   if (!designJob.wechatAccountId || !designJob.conversationId) {
     return skip("missing_send_target", ["wechatAccountId", "conversationId"]);
   }
-  const automation = inspectBundleAutomationReadiness(designJob.bundle || {});
-  if (!automation.ok) return skip(automation.reason, automation.blockers || []);
+  if (!businessRiskDisabled) {
+    const automation = inspectBundleAutomationReadiness(designJob.bundle || {});
+    if (!automation.ok) return skip(automation.reason, automation.blockers || []);
+  }
 
   return {
     ok: true,
@@ -77,6 +81,7 @@ function evaluateLowValueOrderDraftFromQuote(quote = {}, options = {}) {
   }
 
   const designJob = quote.designJob || {};
+  const businessRiskDisabled = options.businessRiskControlsDisabled === true;
   const highValueAmount = Number(options.highValueAmountCny || 10000);
   const totalPrice = Number(quote.totalPrice || 0);
   const unitPrice = Number(quote.unitPrice || 0);
@@ -89,22 +94,24 @@ function evaluateLowValueOrderDraftFromQuote(quote = {}, options = {}) {
     return skip("status_not_ready", ["status"]);
   }
   if (!quote.selectedImageId) return skip("missing_selected_image", ["selectedImageId"]);
-  if (Number.isFinite(profit) && profit < 0) return skip("negative_profit", ["profit"]);
+  if (!businessRiskDisabled && Number.isFinite(profit) && profit < 0) return skip("negative_profit", ["profit"]);
   if (!designJob || !designJob.id) return skip("missing_design_job", ["designJob"]);
-  if (isHighValueAmount({ totalPrice, unitPrice, highValueAmount }) || isHighValueDesignJob(designJob, highValueAmount)) {
+  if (!businessRiskDisabled && (isHighValueAmount({ totalPrice, unitPrice, highValueAmount }) || isHighValueDesignJob(designJob, highValueAmount))) {
     return skip("manual_review_required", ["manualReview"]);
   }
-  if (designJob.conversation?.manualLocked || designJob.manualLocked) {
+  if (!businessRiskDisabled && (designJob.conversation?.manualLocked || designJob.manualLocked)) {
     return skip("conversation_manual_locked", ["manualLocked"]);
   }
-  if (!readyPayments.has(paymentStatus)) {
+  if (!businessRiskDisabled && !readyPayments.has(paymentStatus)) {
     return skip("payment_not_ready", ["paymentStatus"]);
   }
   if (!designJob.wechatAccountId || !designJob.conversationId) {
     return skip("missing_order_target", ["wechatAccountId", "conversationId"]);
   }
-  const automation = inspectBundleAutomationReadiness(designJob.bundle || quote.bundleSnapshot || {});
-  if (!automation.ok) return skip(automation.reason, automation.blockers || []);
+  if (!businessRiskDisabled) {
+    const automation = inspectBundleAutomationReadiness(designJob.bundle || quote.bundleSnapshot || {});
+    if (!automation.ok) return skip(automation.reason, automation.blockers || []);
+  }
 
   return {
     ok: true,
@@ -116,6 +123,7 @@ function evaluateLowValueOrderDraftFromQuote(quote = {}, options = {}) {
 
 function evaluateLowValueOrderConfirmationSend(order = {}, options = {}) {
   if (!order || !order.id) return skip("invalid_order_draft", ["orderDraft"]);
+  const businessRiskDisabled = options.businessRiskControlsDisabled === true;
   const confirmationTask = order.confirmationSendTask || (order.confirmationSendTaskId ? { id: order.confirmationSendTaskId } : null);
   if (sendTaskNeedsManualAttention(confirmationTask)) {
     return skip("manual_send_attention_required", ["confirmationSendTask"]);
@@ -139,36 +147,38 @@ function evaluateLowValueOrderConfirmationSend(order = {}, options = {}) {
     paymentStatus === "paid";
 
   if (!acceptedByCustomer) return skip("quote_not_accepted", ["acceptedQuoteOrPayment"]);
-  if (!["deposit_paid", "paid"].includes(paymentStatus)) {
+  if (!businessRiskDisabled && !["deposit_paid", "paid"].includes(paymentStatus)) {
     return skip("payment_not_ready", ["paymentStatus"]);
   }
   if (!order.selectedImageId && !quote.selectedImageId) {
     return skip("missing_selected_image", ["selectedImageId"]);
   }
-  if (Number.isFinite(profit) && profit < 0) return skip("negative_profit", ["profit"]);
+  if (!businessRiskDisabled && Number.isFinite(profit) && profit < 0) return skip("negative_profit", ["profit"]);
   if (!designJob || (!designJob.id && !order.designJobId && !quote.designJobId)) {
     return skip("missing_design_job", ["designJob"]);
   }
-  if (
+  if (!businessRiskDisabled && (
     isHighValueDesignJob(designJob, highValueAmount) ||
     (Number.isFinite(totalPrice) && totalPrice >= highValueAmount) ||
     (Number.isFinite(unitPrice) && unitPrice >= highValueAmount)
-  ) {
+  )) {
     return skip("manual_review_required", ["manualReview"]);
   }
-  if (
+  if (!businessRiskDisabled && (
     order.conversation?.manualLocked ||
     designJob.conversation?.manualLocked ||
     designJob.manualLocked ||
     order.manualLocked
-  ) {
+  )) {
     return skip("conversation_manual_locked", ["manualLocked"]);
   }
   if (!order.wechatAccountId || !order.conversationId) {
     return skip("missing_send_target", ["wechatAccountId", "conversationId"]);
   }
-  const automation = inspectBundleAutomationReadiness(designJob.bundle || order.bundleSnapshot || quote.bundleSnapshot || {});
-  if (!automation.ok) return skip(automation.reason, automation.blockers || []);
+  if (!businessRiskDisabled) {
+    const automation = inspectBundleAutomationReadiness(designJob.bundle || order.bundleSnapshot || quote.bundleSnapshot || {});
+    if (!automation.ok) return skip(automation.reason, automation.blockers || []);
+  }
 
   return {
     ok: true,
@@ -180,6 +190,7 @@ function evaluateLowValueOrderConfirmationSend(order = {}, options = {}) {
 
 function evaluateLowValueOrderFollowupSend(order = {}, options = {}) {
   if (!order || !order.id) return skip("invalid_order_draft", ["orderDraft"]);
+  const businessRiskDisabled = options.businessRiskControlsDisabled === true;
   if (order.status === "cancelled") return skip("order_cancelled", ["status"]);
 
   const followupType = order.status === "fulfilled" ? "delivery" : "production";
@@ -220,36 +231,38 @@ function evaluateLowValueOrderFollowupSend(order = {}, options = {}) {
   const profit = Number(order.profit ?? quote.profit);
   const paymentStatus = order.paymentStatus || quote.paymentStatus || "unpaid";
 
-  if (!["deposit_paid", "paid"].includes(paymentStatus)) {
+  if (!businessRiskDisabled && !["deposit_paid", "paid"].includes(paymentStatus)) {
     return skip("payment_not_ready", ["paymentStatus"]);
   }
   if (!order.selectedImageId && !quote.selectedImageId) {
     return skip("missing_selected_image", ["selectedImageId"]);
   }
-  if (Number.isFinite(profit) && profit < 0) return skip("negative_profit", ["profit"]);
+  if (!businessRiskDisabled && Number.isFinite(profit) && profit < 0) return skip("negative_profit", ["profit"]);
   if (!designJob || (!designJob.id && !order.designJobId && !quote.designJobId)) {
     return skip("missing_design_job", ["designJob"]);
   }
-  if (
+  if (!businessRiskDisabled && (
     isHighValueDesignJob(designJob, highValueAmount) ||
     (Number.isFinite(totalPrice) && totalPrice >= highValueAmount) ||
     (Number.isFinite(unitPrice) && unitPrice >= highValueAmount)
-  ) {
+  )) {
     return skip("manual_review_required", ["manualReview"]);
   }
-  if (
+  if (!businessRiskDisabled && (
     order.conversation?.manualLocked ||
     designJob.conversation?.manualLocked ||
     designJob.manualLocked ||
     order.manualLocked
-  ) {
+  )) {
     return skip("conversation_manual_locked", ["manualLocked"]);
   }
   if (!order.wechatAccountId || !order.conversationId) {
     return skip("missing_send_target", ["wechatAccountId", "conversationId"]);
   }
-  const automation = inspectBundleAutomationReadiness(designJob.bundle || order.bundleSnapshot || quote.bundleSnapshot || {});
-  if (!automation.ok) return skip(automation.reason, automation.blockers || []);
+  if (!businessRiskDisabled) {
+    const automation = inspectBundleAutomationReadiness(designJob.bundle || order.bundleSnapshot || quote.bundleSnapshot || {});
+    if (!automation.ok) return skip(automation.reason, automation.blockers || []);
+  }
 
   return {
     ok: true,

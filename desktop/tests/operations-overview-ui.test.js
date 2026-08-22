@@ -41,7 +41,20 @@ test("overview follows the dense Tencent-style operational information hierarchy
   assert.match(css, /--overview-brand:\s*var\(--wk-color-brand\);/);
   assert.match(css, /--overview-surface:\s*var\(--wk-color-surface\);/);
   assert.match(css, /border:\s*1px solid var\(--overview-border\);/);
+  assert.match(css, /max-width:\s*1440px;/);
   assert.doesNotMatch(css, /linear-gradient|radial-gradient/i);
+});
+
+test("overview table stays bounded inside the shell scroll container", () => {
+  assert.match(css, /\.page\s*\{[\s\S]*?min-height:\s*0;[\s\S]*?flex-direction:\s*column;/);
+  assert.doesNotMatch(css, /\.page\s*\{[\s\S]*?min-height:\s*100%;/);
+  assert.match(css, /\.conversationPanel\s*\{[\s\S]*?display:\s*flex;[\s\S]*?flex:\s*0 0 auto;[\s\S]*?flex-direction:\s*column;/);
+  assert.doesNotMatch(css, /\.conversationPanel\s*\{[\s\S]*?flex:\s*1 1 auto;/);
+  assert.match(css, /\.tableWrap\s*\{[\s\S]*?overflow-x:\s*auto;[\s\S]*?overflow-y:\s*hidden;[\s\S]*?scrollbar-gutter:\s*stable;/);
+  assert.match(css, /\.tableWrap table\s*\{[\s\S]*?min-width:\s*860px;/);
+
+  const mobile = css.slice(css.indexOf("@media (max-width: 760px)"));
+  assert.match(mobile, /\.tableWrap table\s*\{[\s\S]*?min-width:\s*0;/);
 });
 
 test("channels, actions, metrics, and conversations are rendered from caller-owned live data", () => {
@@ -70,6 +83,7 @@ test("overview actions delegate refresh, navigation, conversation, and automatio
   assert.match(component, /onClick=\{onOpenConversations\}/);
   assert.match(component, /onClick=\{onOpenChannels\}/);
   assert.match(component, /onClick=\{onOpenLaunchPlan\}/);
+  assert.match(component, /onClick=\{item\.onClick\}/);
   assert.match(component, /onClick=\{onRunAutomation\}\s+disabled=\{busy\}/);
 
   assert.equal(
@@ -81,6 +95,18 @@ test("overview actions delegate refresh, navigation, conversation, and automatio
     (component.match(/onClick=\{onOpenChannels\}/g) || []).length >= 2,
     "channel management should remain reachable from populated and empty states",
   );
+});
+
+test("overview connects send blockers and launch-plan rows to dedicated handling pages", () => {
+  assert.match(overviewPage, /id:\s*"send-queue"/);
+  assert.match(overviewPage, /id:\s*"send-blocked"/);
+  assert.match(overviewPage, /navigate\("sendQueue"\)/);
+  assert.match(overviewPage, /navigate\("sendBlocked"\)/);
+  assert.match(overviewPage, /launchItemDestination\(item\.key\)/);
+  assert.match(overviewRoute, /sendQueue:\s*"\/send\/queue"/);
+  assert.match(overviewRoute, /sendBlocked:\s*"\/send\/blocked"/);
+  assert.match(overviewRoute, /wechatSettings:\s*"\/integrations\/wechat-work\/settings"/);
+  assert.match(overviewRoute, /wechatFlow:\s*"\/integrations\/wechat-work\/flow"/);
 });
 
 test("overview surfaces delivery readiness as a first-screen production handoff signal", () => {

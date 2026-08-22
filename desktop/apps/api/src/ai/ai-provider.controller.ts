@@ -19,12 +19,45 @@ export class AiProviderController {
     return this.providers.getStatus(true);
   }
 
+  @Post("server-env")
+  @RequireOperatorCapability("manage_channels")
+  generateServerEnv() {
+    return this.providers.generateServerEnvFile();
+  }
+
+  @Post(":provider/test")
+  @RequireOperatorCapability("manage_channels")
+  testProviderResponse(@Param("provider") provider: string) {
+    return this.providers.testProviderResponse(provider);
+  }
+
+  @Post(":provider/balance")
+  @RequireOperatorCapability("manage_channels")
+  getProviderBalance(@Param("provider") provider: string) {
+    return this.providers.getProviderBalance(provider);
+  }
+
+  @Post(":provider/models/sync")
+  @RequireOperatorCapability("manage_channels")
+  syncProviderModels(@Param("provider") provider: string) {
+    return this.providers.syncProviderModels(provider);
+  }
+
   @Post(":provider/credential")
   @RequireOperatorCapability("manage_channels")
   saveProviderCredential(
     @Param("provider") provider: string,
-    @Body() payload: { apiKey?: string; model?: string; enabled?: boolean } = {},
+    @Body() payload: { apiKey?: string; baseUrl?: string; model?: string; enabled?: boolean } = {},
   ) {
     return this.providers.saveProviderCredential({ provider, ...(payload || {}) });
+  }
+
+  @Post(":provider/billing-credential")
+  @RequireOperatorCapability("manage_channels")
+  saveProviderBillingCredential(
+    @Param("provider") provider: string,
+    @Body() payload: { accessKeyId?: string; accessKeySecret?: string; adminKey?: string } = {},
+  ) {
+    return this.providers.saveProviderBillingCredential({ provider, ...(payload || {}) });
   }
 }

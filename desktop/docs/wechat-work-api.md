@@ -22,7 +22,7 @@
 ```text
 CUSTOMER_SERVICE_PUBLIC_BASE_URL=https://your-public-domain.example.com
 WECHAT_WORK_CORP_ID=your-corp-id
-WECHAT_WORK_SECRET=your-wechat-customer-service-secret
+WECHAT_WORK_SECRET=your-authorized-self-built-app-secret
 WECHAT_WORK_TOKEN=the-token-set-in-wechat-work-admin
 WECHAT_WORK_ENCODING_AES_KEY=the-43-character-encoding-aes-key
 WECHAT_SEND_ADAPTER=wechat_work_kf
@@ -37,7 +37,7 @@ WECHAT_WORK_SEND_MAX_ATTEMPTS=3
 WECHAT_WORK_SEND_RETRY_DELAY_SECONDS=30
 ```
 
-`WECHAT_WORK_SECRET` 必须是“微信客服”Secret。企业微信后台还要把目标客服账号设置为允许 API 管理，并授予“管理帐号、分配会话和收发消息”权限。`CUSTOMER_SERVICE_PUBLIC_BASE_URL` 必须是企业微信可访问的公网 HTTPS 地址。
+新企业不需要寻找“微信客服”系统 Secret。`WECHAT_WORK_SECRET` 应填写“应用管理 → 应用 → 自建”中对应自建应用的 Secret，并在“应用管理 → 微信客服 → API → 可调用接口的应用”勾选该应用、给目标客服账号授权 API 管理范围。自建应用详情页的“开发者接口 → 企业可信 IP”还要包含实际部署服务器的公网出口 IP。若同一个应用也已加入客户联系的“可调用接口的应用”，`WECHAT_WORK_EXTERNAL_CONTACT_SECRET` 可以留空并复用该 Secret。`CUSTOMER_SERVICE_PUBLIC_BASE_URL` 必须是企业微信可访问的公网 HTTPS 地址。
 
 ## 企业微信服务商应用扫码授权
 

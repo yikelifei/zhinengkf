@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   getAutomationReadiness,
   getAutomationStatus,
+  getAgentTasks,
   getConversationOperationsQueue,
   getDeliveryReadiness,
   getNotifications,
@@ -12,6 +13,7 @@ import {
   getWechatWorkProductionPreflight,
   type AutomationReadiness,
   type AutomationStatus,
+  type AgentTask,
   type ConversationOperationsQueue,
   type DeliveryReadiness,
   type IdentityFilters,
@@ -33,6 +35,7 @@ export function useOverviewData(identityFilters?: IdentityFilters) {
   const [wechatWorkReadiness, setWechatWorkReadiness] = useState<WechatWorkProductionReadiness | null>(null);
   const [deliveryReadiness, setDeliveryReadiness] = useState<DeliveryReadiness | null>(null);
   const [notificationsRead, setNotificationsRead] = useState<ScopedOverviewValue<NotificationItem[]>>(null);
+  const [agentTasksRead, setAgentTasksRead] = useState<ScopedOverviewValue<AgentTask[]>>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const refreshSequence = useRef(0);
@@ -50,6 +53,8 @@ export function useOverviewData(identityFilters?: IdentityFilters) {
   const reviewCenter = scopedValue(reviewCenterRead, identityScopeKey);
   const notifications = scopedValue(notificationsRead, identityScopeKey) ?? [];
   const notificationsLoaded = notificationsRead?.scopeKey === identityScopeKey;
+  const agentTasks = scopedValue(agentTasksRead, identityScopeKey) ?? [];
+  const agentTasksLoaded = agentTasksRead?.scopeKey === identityScopeKey;
 
   const refresh = useCallback(async () => {
     const sequence = ++refreshSequence.current;
@@ -70,6 +75,9 @@ export function useOverviewData(identityFilters?: IdentityFilters) {
       progressiveOverviewRead(getDeliveryReadiness(), sequence, refreshSequence, setDeliveryReadiness),
       progressiveOverviewRead(getNotifications(false, stableIdentityFilters), sequence, refreshSequence, (value) => {
         setNotificationsRead({ scopeKey: requestScopeKey, value });
+      }),
+      progressiveOverviewRead(getAgentTasks({ ...stableIdentityFilters, limit: 200 }), sequence, refreshSequence, (value) => {
+        setAgentTasksRead({ scopeKey: requestScopeKey, value });
       }),
     ];
     const results = await Promise.allSettled(reads);
@@ -98,6 +106,8 @@ export function useOverviewData(identityFilters?: IdentityFilters) {
     deliveryReadiness,
     notifications,
     notificationsLoaded,
+    agentTasks,
+    agentTasksLoaded,
     busy,
     error,
     refresh,

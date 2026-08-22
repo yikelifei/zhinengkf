@@ -19,6 +19,7 @@ const sentinels = {
   DATABASE_URL: "database-secret",
   LOW_VALUE_AUTOMATION_REDIS_URL: "redis-secret",
   WECHAT_WORK_SECRET: "wecom-secret",
+  WECHAT_WORK_EXTERNAL_CONTACT_SECRET: "wecom-external-contact-secret",
   WECHAT_WORK_SUITE_ID: "wecom-suite-id",
   WECHAT_WORK_SUITE_SECRET: "wecom-suite-secret",
   WECHAT_WORK_SUITE_TOKEN: "wecom-suite-token",
@@ -27,6 +28,12 @@ const sentinels = {
   DESIGN_PLATFORM_ACCESS_TOKEN: "design-secret",
   DESIGN_PLATFORM_COOKIE: "design-cookie",
   PERSONAL_WECHAT_RPA_TOKEN: "rpa-secret",
+  DASHSCOPE_API_KEY: "dashscope-secret",
+  DASHSCOPE_MODEL: "qwen3.7-flash",
+  AI_PROVIDER_DASHSCOPE_ENABLED: "true",
+  OPENAI_API_KEY: "openai-secret",
+  OPENAI_MODEL: "gpt-4o-mini",
+  AI_PROVIDER_OPENAI_ENABLED: "true",
   UNRELATED_SECRET: "unrelated-secret",
   ZHENXI_AI_APP_URL: "https://app.zhenxiai.cloud",
   ZHENXI_AI_SITE_URL: "https://zhenxiai.cloud",
@@ -34,6 +41,9 @@ const sentinels = {
   ZHENXI_AI_LOCAL_BASE_URL: "http://127.0.0.1:3010",
   ZHENXI_AI_LOCAL_DEV_URL: "http://127.0.0.1:3000",
   ZHENXI_AI_LOCAL_PREVIEW_URL: "http://127.0.0.1:3001",
+  ZHENXI_BROWSER_EMBED_PORT: "3710",
+  ZHENXI_BROWSER_UPSTREAMS: "http://127.0.0.1:3000,http://127.0.0.1:3001",
+  DESIGN_PLATFORM_BASE_URL: "http://127.0.0.1:3000",
   DESIGN_PLATFORM_RUNTIME_CONFIG: "C:\\runtime\\design.json",
   WECHAT_BRIDGE_SERVICE_TOKEN_FILE: "C:\\runtime\\bridge.key",
   WECHAT_WINDOW_OBSERVER_PROOF_FILE: "C:\\runtime\\observer.key",
@@ -50,6 +60,7 @@ test("service environments expose business secrets only to the API", () => {
     "DATABASE_URL",
     "LOW_VALUE_AUTOMATION_REDIS_URL",
     "WECHAT_WORK_SECRET",
+    "WECHAT_WORK_EXTERNAL_CONTACT_SECRET",
     "WECHAT_WORK_SUITE_ID",
     "WECHAT_WORK_SUITE_SECRET",
     "WECHAT_WORK_SUITE_TOKEN",
@@ -69,15 +80,29 @@ test("service environments expose business secrets only to the API", () => {
   ]) {
     assert.equal(api[key], sentinels[key], key);
   }
+  for (const key of [
+    "DASHSCOPE_API_KEY",
+    "DASHSCOPE_MODEL",
+    "AI_PROVIDER_DASHSCOPE_ENABLED",
+    "OPENAI_API_KEY",
+    "OPENAI_MODEL",
+    "AI_PROVIDER_OPENAI_ENABLED",
+  ]) {
+    assert.equal(api[key], sentinels[key], key);
+  }
   assert.equal(api.UNRELATED_SECRET, undefined);
 
-  for (const name of ["web", "design-platform-mock", "wechat-window-observer", "wechat-bridge-worker", "personal-wechat-rpa-host", "personal-wechat-bridge"]) {
+  for (const name of ["web", "design-platform-mock", "zhenxi-browser-embed", "wechat-window-observer", "wechat-bridge-worker", "personal-wechat-rpa-host", "personal-wechat-bridge"]) {
     const env = selectServiceEnvironment(name, sentinels);
-    for (const key of ["DATABASE_URL", "LOW_VALUE_AUTOMATION_REDIS_URL", "WECHAT_WORK_SECRET", "WECHAT_WORK_SUITE_SECRET", "WECHAT_WORK_SUITE_TOKEN", "WECHAT_WORK_SUITE_ENCODING_AES_KEY", "WECHAT_WORK_SUITE_STORAGE_KEY", "DESIGN_PLATFORM_ACCESS_TOKEN", "DESIGN_PLATFORM_COOKIE", "PERSONAL_WECHAT_RPA_TOKEN", "UNRELATED_SECRET"]) {
+    for (const key of ["DATABASE_URL", "LOW_VALUE_AUTOMATION_REDIS_URL", "WECHAT_WORK_SECRET", "WECHAT_WORK_EXTERNAL_CONTACT_SECRET", "WECHAT_WORK_SUITE_SECRET", "WECHAT_WORK_SUITE_TOKEN", "WECHAT_WORK_SUITE_ENCODING_AES_KEY", "WECHAT_WORK_SUITE_STORAGE_KEY", "DESIGN_PLATFORM_ACCESS_TOKEN", "DESIGN_PLATFORM_COOKIE", "PERSONAL_WECHAT_RPA_TOKEN", "DASHSCOPE_API_KEY", "OPENAI_API_KEY", "UNRELATED_SECRET"]) {
       assert.equal(env[key], undefined, `${name}:${key}`);
     }
   }
   assert.equal(selectServiceEnvironment("personal-wechat-bridge", sentinels).PERSONAL_WECHAT_RPA_CONFIG_FILE, sentinels.PERSONAL_WECHAT_RPA_CONFIG_FILE);
+  const embed = selectServiceEnvironment("zhenxi-browser-embed", sentinels);
+  assert.equal(embed.ZHENXI_BROWSER_EMBED_PORT, "3710");
+  assert.equal(embed.ZHENXI_BROWSER_UPSTREAMS, sentinels.ZHENXI_BROWSER_UPSTREAMS);
+  assert.equal(embed.DESIGN_PLATFORM_BASE_URL, sentinels.DESIGN_PLATFORM_BASE_URL);
 });
 
 test("packaged Web keeps only its in-memory proof and API token", () => {
@@ -94,7 +119,7 @@ test("packaged Web keeps only its in-memory proof and API token", () => {
   assert.equal(api.DESKTOP_WEB_SESSION_PROOF, undefined);
   assert.equal(web.INTERNAL_API_TOKEN, "packaged-internal-token");
   assert.equal(web.DESKTOP_WEB_SESSION_PROOF, "session-proof");
-  for (const key of ["DATABASE_URL", "LOW_VALUE_AUTOMATION_REDIS_URL", "WECHAT_WORK_SECRET", "WECHAT_WORK_SUITE_SECRET", "WECHAT_WORK_SUITE_TOKEN", "WECHAT_WORK_SUITE_ENCODING_AES_KEY", "WECHAT_WORK_SUITE_STORAGE_KEY", "DESIGN_PLATFORM_ACCESS_TOKEN", "DESIGN_PLATFORM_COOKIE", "UNRELATED_SECRET", "DESKTOP_ENV_FILE"]) {
+  for (const key of ["DATABASE_URL", "LOW_VALUE_AUTOMATION_REDIS_URL", "WECHAT_WORK_SECRET", "WECHAT_WORK_SUITE_SECRET", "WECHAT_WORK_SUITE_TOKEN", "WECHAT_WORK_SUITE_ENCODING_AES_KEY", "WECHAT_WORK_SUITE_STORAGE_KEY", "DESIGN_PLATFORM_ACCESS_TOKEN", "DESIGN_PLATFORM_COOKIE", "DASHSCOPE_API_KEY", "OPENAI_API_KEY", "UNRELATED_SECRET", "DESKTOP_ENV_FILE"]) {
     assert.equal(web[key], undefined, key);
   }
   const webWrapper = renderWindowsWrapperEnvironment("web", web).join("\r\n");
@@ -112,7 +137,7 @@ test("generated cmd environment persists file references but no raw credential",
   assert.equal(wrapper.LOW_VALUE_AUTOMATION_ENABLED, "true");
   assert.equal(wrapper.LOW_VALUE_AUTOMATION_MODE, "interval");
   assert.equal(wrapper.LOW_VALUE_AUTOMATION_RUN_ON_START, "true");
-  for (const key of ["INTERNAL_API_TOKEN", "DATABASE_URL", "LOW_VALUE_AUTOMATION_REDIS_URL", "WECHAT_WORK_SECRET", "WECHAT_WORK_SUITE_SECRET", "WECHAT_WORK_SUITE_TOKEN", "WECHAT_WORK_SUITE_ENCODING_AES_KEY", "WECHAT_WORK_SUITE_STORAGE_KEY", "DESIGN_PLATFORM_ACCESS_TOKEN", "DESIGN_PLATFORM_COOKIE", "PERSONAL_WECHAT_RPA_TOKEN"]) {
+  for (const key of ["INTERNAL_API_TOKEN", "DATABASE_URL", "LOW_VALUE_AUTOMATION_REDIS_URL", "WECHAT_WORK_SECRET", "WECHAT_WORK_SUITE_SECRET", "WECHAT_WORK_SUITE_TOKEN", "WECHAT_WORK_SUITE_ENCODING_AES_KEY", "WECHAT_WORK_SUITE_STORAGE_KEY", "DESIGN_PLATFORM_ACCESS_TOKEN", "DESIGN_PLATFORM_COOKIE", "PERSONAL_WECHAT_RPA_TOKEN", "DASHSCOPE_API_KEY", "OPENAI_API_KEY"]) {
     assert.equal(wrapper[key], undefined, key);
   }
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "smart-kefu-wrapper-"));
@@ -121,7 +146,7 @@ test("generated cmd environment persists file references but no raw credential",
   fs.writeFileSync(wrapperPath, ["@echo off", ...renderWindowsWrapperEnvironment("api", selectServiceEnvironment("api", sentinels)), "node api.js"].join("\r\n"));
   const generated = fs.readFileSync(wrapperPath, "utf8");
   assert.match(generated, /DESIGN_PLATFORM_RUNTIME_CONFIG/);
-  for (const secret of ["internal-secret", "database-secret", "redis-secret", "wecom-secret", "wecom-suite-secret", "wecom-suite-token", "wecom-suite-aes-key", "wecom-suite-storage-key", "design-secret", "design-cookie", "rpa-secret", "unrelated-secret"]) {
+  for (const secret of ["internal-secret", "database-secret", "redis-secret", "wecom-secret", "wecom-suite-secret", "wecom-suite-token", "wecom-suite-aes-key", "wecom-suite-storage-key", "design-secret", "design-cookie", "rpa-secret", "dashscope-secret", "openai-secret", "unrelated-secret"]) {
     assert.doesNotMatch(generated, new RegExp(secret), secret);
   }
 });

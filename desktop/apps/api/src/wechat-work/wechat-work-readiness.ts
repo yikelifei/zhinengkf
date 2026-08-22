@@ -589,7 +589,9 @@ function buildLaunchPlan(input: {
       status: combineChecks(localCheck("official_send_adapter"), localCheck("persistence")),
       phase: "during_icp",
       owner: "developer",
-      action: "确认 WECHAT_SEND_ADAPTER=wechat_work_kf 与 USE_LOCAL_STORE=false。",
+      action: localCheck("persistence")?.status === "ready"
+        ? "确认 WECHAT_SEND_ADAPTER=wechat_work_kf，并通过数据库迁移状态与 API dataMode=prisma 验收。"
+        : "先准备 PostgreSQL、执行 Prisma 生产迁移和本地 JSON 数据导入，再在生产/预发布进程设置 USE_LOCAL_STORE=false；不能只修改 .env。",
     },
     {
       key: "operator_preflight_ready",
@@ -610,7 +612,9 @@ function buildLaunchPlan(input: {
       status: externalCheck("public_callback_url")?.status || (input.publicCallbackConfigured ? "blocked" : "missing"),
       phase: "after_icp",
       owner: "operator",
-      action: "将 CUSTOMER_SERVICE_PUBLIC_BASE_URL 指向已备案域名。",
+      action: input.publicCallbackConfigured
+        ? "公网 HTTPS URL 已配置；下一步在企业微信后台提交回调校验，让服务端持久化 callback_accepted 证据。"
+        : "将 CUSTOMER_SERVICE_PUBLIC_BASE_URL 指向已备案的公网 HTTPS 域名。",
     },
     {
       key: "wecom_callback_registration",

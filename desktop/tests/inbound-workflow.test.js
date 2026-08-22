@@ -24,7 +24,8 @@ test("routes a production-ready poster request to exactly four Zhenxi image cand
   });
   assert.equal(plan.reason, "customer_creative_ready");
   assert.equal(plan.shouldCreateDesignJob, true);
-  assert.match(buildInboundReplyText({}, plan), /4 版/);
+  assert.match(buildInboundReplyText({}, plan), /4 条文案方案/);
+  assert.match(buildInboundReplyText({}, plan), /4 张设计图/);
 });
 
 test("requires real references when a Zhenxi request must preserve supplied identity", () => {
@@ -77,12 +78,42 @@ test("routes every Zhenxi copy module to a durable copy job", () => {
   }
 });
 
-test("queues a safe acknowledgement for high value route while preserving manual quote safeguards", () => {
+test("a Zhenxi status query can reply on a manual route without creating a new design job", () => {
+  const zhenxiRequest = planZhenxiCustomerRequest({
+    text: "生成好了吗",
+    previousPlan: {
+      kind: "clarify",
+      module: "customer_creative",
+      planId: "customer-creative:status-routing-1",
+      requestedDeliverables: ["greeting_card"],
+      missingFields: ["copy_text"],
+    },
+  });
+  const plan = planInboundAutomation({
+    route: {
+      action: "manual_review",
+      agentKey: "general",
+      routingPolicy: { lane: "manual_review", manualRequired: true, canQueueAutoReply: false },
+    },
+    zhenxiRequest,
+  });
+
+  assert.equal(zhenxiRequest.kind, "status");
+  assert.equal(plan.type, "queue_reply");
+  assert.equal(plan.reason, "zhenxi_status_not_started");
+  assert.equal(plan.shouldQueueReply, true);
+  assert.equal(plan.shouldCreateDesignJob, false);
+  assert.equal(plan.shouldCreateZhenxiCopyJob, false);
+  assert.match(buildInboundReplyText({}, plan), /还没有开始生成/);
+});
+
+test("business risk disabled routes high value manual route to smart reply", () => {
   const plan = planInboundAutomation({
     route: {
       action: "manual_review",
       isHighValue: true,
       agentKey: "gift_design",
+      suggestedReply: "这个金额需要人工核对后再报价。",
       routingPolicy: {
         lane: "high_value_human",
         valueTier: "high",
@@ -95,25 +126,21 @@ test("queues a safe acknowledgement for high value route while preserving manual
   });
 
   assert.equal(plan.type, "queue_reply");
-  assert.equal(plan.reason, "high_value_safe_acknowledgement");
-  assert.equal(plan.shouldNotifyHuman, true);
+  assert.equal(plan.reason, "business_risk_disabled_auto_reply");
+  assert.equal(plan.shouldNotifyHuman, false);
   assert.equal(plan.shouldQueueReply, true);
   assert.equal(plan.shouldLockConversation, false);
-  assert.equal(plan.acknowledgementOnly, true);
-  assert.equal(plan.routingPolicy.lane, "high_value_guided_reply");
+  assert.equal(plan.businessRiskControlsDisabled, true);
+  assert.equal(plan.acknowledgementOnly, undefined);
+  assert.equal(plan.routingPolicy.lane, "business_risk_disabled_agent");
   assert.equal(plan.routingPolicy.canQueueAutoReply, true);
   assert.equal(plan.routingPolicy.manualRequired, false);
-  assert.ok(plan.routingPolicy.safeguards.includes("final_quote_manual_review"));
-  const reply = buildInboundReplyText({ budget: { quantity: 20, perUnitAmount: 500 } }, plan);
-  assert.match(reply, /20/);
-  assert.match(reply, /500/);
-  assert.match(reply, /别把预算全压在单品上/);
-  assert.match(reply, /送客户还是员工/);
-  assert.doesNotMatch(reply, /我已经记下|再确认三个信息|正式报价/);
-  assert.doesNotMatch(reply, /红金礼盒|商品库/);
+  assert.equal(plan.routingPolicy.safeguards.includes("human_approval_required"), false);
+  const reply = buildInboundReplyText({ suggestedReply: "这个金额需要人工核对后再报价。" }, plan);
+  assert.doesNotMatch(reply, /人工|转人工/);
 });
 
-test("keeps manually locked conversation out of automation", () => {
+test("manual lock no longer stops smart customer-service automation", () => {
   const plan = planInboundAutomation({
     conversationManualLocked: true,
     route: { action: "auto_agent", agentKey: "gift_design", missingFields: [] },
@@ -121,11 +148,11 @@ test("keeps manually locked conversation out of automation", () => {
     bundleRecommendation: { items: [{ skuCode: "BOX-A" }, { skuCode: "TEA-A" }] },
   });
 
-  assert.equal(plan.type, "manual_locked");
-  assert.equal(plan.reason, "conversation_manual_locked");
-  assert.equal(plan.shouldNotifyHuman, true);
-  assert.equal(plan.shouldQueueReply, false);
-  assert.equal(plan.shouldCreateDesignJob, false);
+  assert.equal(plan.type, "create_design_job");
+  assert.equal(plan.reason, "complete_gift_design_request");
+  assert.equal(plan.shouldNotifyHuman, false);
+  assert.equal(plan.shouldQueueReply, true);
+  assert.equal(plan.shouldCreateDesignJob, true);
 });
 
 test("queues a safe clarification for low-risk manual review during employee testing", () => {
@@ -145,21 +172,24 @@ test("queues a safe clarification for low-risk manual review during employee tes
   });
 
   assert.equal(plan.type, "queue_reply");
-  assert.equal(plan.reason, "internal_test_safe_reply");
+  assert.equal(plan.reason, "business_risk_disabled_auto_reply");
   assert.equal(plan.shouldQueueReply, true);
-  assert.equal(plan.internalTestOverride, true);
+  assert.equal(plan.internalTestOverride, undefined);
   assert.equal(plan.shouldNotifyHuman, false);
-  assert.match(buildInboundReplyText({}, plan), /补充/);
+  assert.equal(plan.businessRiskControlsDisabled, true);
+  assert.match(buildInboundReplyText({}, plan), /继续处理|补问/);
 });
 
-test("employee testing does not weaken high-value acknowledgement or risky manual review", () => {
+test("business risk disabled keeps employee testing on smart replies for risky routes", () => {
   const highValuePlan = planInboundAutomation({
     internalTestAutoReply: true,
     route: { action: "manual_review", isHighValue: true, riskFlags: [] },
   });
-  assert.equal(highValuePlan.reason, "high_value_safe_acknowledgement");
+  assert.equal(highValuePlan.reason, "business_risk_disabled_auto_reply");
   assert.equal(highValuePlan.internalTestOverride, undefined);
-  assert.equal(highValuePlan.acknowledgementOnly, true);
+  assert.equal(highValuePlan.acknowledgementOnly, undefined);
+  assert.equal(highValuePlan.shouldNotifyHuman, false);
+  assert.equal(highValuePlan.businessRiskControlsDisabled, true);
 
   for (const route of [
     { action: "manual_review", isHighValue: false, riskFlags: ["payment_claim"] },
@@ -171,12 +201,16 @@ test("employee testing does not weaken high-value acknowledgement or risky manua
     },
   ]) {
     const plan = planInboundAutomation({ internalTestAutoReply: true, route });
-    assert.equal(plan.type, "manual_review");
-    assert.equal(plan.shouldQueueReply, false);
+    assert.equal(plan.type, "queue_reply");
+    assert.equal(plan.shouldQueueReply, true);
+    assert.equal(plan.shouldNotifyHuman, false);
+    assert.equal(plan.shouldLockConversation, false);
+    assert.equal(plan.reason, "business_risk_disabled_auto_reply");
+    assert.equal(plan.businessRiskControlsDisabled, true);
   }
 });
 
-test("customer creative tools bypass only unrelated catalog readiness and keep real risks manual", () => {
+test("business risk disabled lets customer creative tools bypass risk review", () => {
   const creativeRequest = planZhenxiCustomerRequest({
     text: "做一张贺卡，文案写“感谢一路相伴”，不放logo，尺寸90x54mm",
     requestContextId: "creative-routing-safety-1",
@@ -200,8 +234,10 @@ test("customer creative tools bypass only unrelated catalog readiness and keep r
     },
     zhenxiRequest: creativeRequest,
   });
-  assert.equal(riskyPlan.type, "manual_review");
-  assert.equal(riskyPlan.shouldCreateDesignJob, false);
+  assert.equal(riskyPlan.type, "create_design_job");
+  assert.equal(riskyPlan.shouldQueueReply, true);
+  assert.equal(riskyPlan.shouldNotifyHuman, false);
+  assert.equal(riskyPlan.shouldCreateDesignJob, true);
 });
 
 test("does not create gift design job without real asset ids", () => {
@@ -265,7 +301,7 @@ test("creates gift design job only when bundle and real assets exist", () => {
   assert.equal(plan.routingPolicy.canQueueAutoReply, true);
 });
 
-test("sends gift design request to manual review when recommended bundle is not automation ready", () => {
+test("business risk disabled still creates gift design job when recommended bundle is not automation ready", () => {
   const plan = planInboundAutomation({
     route: { action: "auto_agent", agentKey: "gift_design", missingFields: [] },
     assetIds: ["asset_logo"],
@@ -275,10 +311,11 @@ test("sends gift design request to manual review when recommended bundle is not 
     },
   });
 
-  assert.equal(plan.type, "manual_review");
-  assert.equal(plan.reason, "bundle_automation_not_ready");
-  assert.equal(plan.shouldNotifyHuman, true);
-  assert.equal(plan.shouldCreateDesignJob, false);
+  assert.equal(plan.type, "create_design_job");
+  assert.equal(plan.reason, "complete_gift_design_request_business_risk_disabled");
+  assert.equal(plan.shouldNotifyHuman, false);
+  assert.equal(plan.shouldCreateDesignJob, true);
+  assert.equal(plan.businessRiskControlsDisabled, true);
   assert.deepEqual(plan.blockers, ["low_margin", "size_unknown"]);
 });
 

@@ -9,6 +9,7 @@ const test = require("node:test");
 require("ts-node").register({ transpileOnly: true, compilerOptions: { module: "CommonJS" } });
 
 const { LocalStoreService } = require("../apps/api/src/local-store/local-store.service");
+const { createOrderDraftBusinessFingerprint } = require("../apps/api/src/orders/orders.service");
 const { appConfig } = require("../apps/api/src/shared/app-config");
 const { WechatDispatchService } = require("../apps/api/src/wechat/wechat-dispatch.service");
 
@@ -46,6 +47,9 @@ function setup(options = {}) {
     messageWrites: [], routeWrites: [],
   };
   const tx = {
+    wechatAccount: {
+      async updateMany() { return { count: 1 }; },
+    },
     designJob: {
       async findFirst(query) {
         calls.jobQueries.push({ phase: "commit", query });
@@ -158,6 +162,118 @@ function params(payload = { text: "第1张" }, conversationPatch = {}) {
   };
 }
 
+function prismaQuote(patch = {}) {
+  const job = designJob({
+    id: "job-quote",
+    status: "quote_created",
+    wechatAccountId: "account-a",
+    conversationId: "conversation-a",
+    customerId: "customer-a",
+    isHighValue: false,
+    budget: { total: 1000 },
+  });
+  return {
+    id: "quote-prisma",
+    status: "sent",
+    paymentStatus: "unpaid",
+    selectedImageId: "new-1",
+    totalPrice: 1000,
+    totalCost: 800,
+    unitPrice: 10,
+    profit: 200,
+    quantity: 100,
+    customerId: "customer-a",
+    designJobId: job.id,
+    owner: null,
+    customerNotes: "",
+    customer: { id: "customer-a", name: "客户" },
+    selectedImage: { id: "new-1", position: 1 },
+    designJob: job,
+    orderDraft: null,
+    ...patch,
+  };
+}
+
+function setupPrismaQuoteAcceptance(quote) {
+  appConfig.useLocalStore = false;
+  appConfig.highValueAmountCny = 10000;
+  const calls = {
+    quoteQueries: [], quoteUpdates: [], orderCreates: [], finishes: [], reviews: [], fences: [], operationAdvances: [],
+  };
+  const tx = {
+    wechatAccount: {
+      async updateMany() { return { count: 1 }; },
+    },
+    inboundMessageOperation: {
+      async updateMany(query) {
+        calls.fences.push(query);
+        return { count: 1 };
+      },
+    },
+    quoteDraft: {
+      async updateMany() { return { count: 1 }; },
+      async findFirst(query) {
+        calls.quoteQueries.push({ phase: "commit", query });
+        return quote;
+      },
+      async update(query) {
+        calls.quoteUpdates.push(query);
+        return { ...quote, ...query.data };
+      },
+    },
+  };
+  const prisma = {
+    quoteDraft: {
+      async findFirst(query) {
+        calls.quoteQueries.push({ phase: "initial_or_recovery", query });
+        return quote;
+      },
+      async update(query) {
+        calls.quoteUpdates.push(query);
+        return { ...quote, ...query.data };
+      },
+    },
+    async $transaction(callback) { return callback(tx); },
+  };
+  const orders = {
+    async createFromQuote(quoteId, expected, options) {
+      calls.orderCreates.push({ quoteId, expected, options });
+      return quote.orderDraft || {
+        id: "order-prisma",
+        quoteDraftId: quoteId,
+        designJobId: quote.designJobId,
+        wechatAccountId: "account-a",
+        conversationId: "conversation-a",
+        customerId: "customer-a",
+        status: "pending",
+        paymentStatus: "unpaid",
+        totalPrice: quote.totalPrice,
+      };
+    },
+  };
+  const service = new WechatDispatchService(prisma, {}, {}, {}, orders);
+  service.persistence.advanceInboundOperation = async (operationId, claimToken, patch) => {
+    calls.operationAdvances.push({ operationId, claimToken, patch });
+    return { id: operationId, claimToken, ...patch };
+  };
+  service.finishLocalQuoteAcceptance = async (...args) => {
+    calls.finishes.push(args);
+    return {
+      message: args[0].message,
+      route: args[0].route,
+      plan: { type: "quote_accepted", reason: args[3].reason, shouldQueueReply: false },
+      quote: args[1],
+      orderDraft: args[2],
+      quoteAcceptance: args[3],
+    };
+  };
+  service.createInboundQuoteReview = async (_conversation, _route, reviewedQuote, options) => {
+    calls.reviews.push({ reviewedQuote, options });
+    return { id: "review-notification", ...options };
+  };
+  return { service, calls };
+}
+
 test("Prisma inbound selection binds exact identity and only the latest revision round", async () => {
   const { service, calls } = setup();
   const result = await service.handlePrismaInboundImageSelection(params());
@@ -169,6 +285,185 @@ test("Prisma inbound selection binds exact identity and only the latest revision
   assert.equal(calls.jobQueries[0].query.where.customerId, "customer-a");
   assert.equal(calls.imageUpdates.find((item) => item.type === "one").query.where.id, "new-1");
   assert.equal(calls.imageUpdates.some((item) => item.query.where?.id === "old-1"), false);
+});
+
+test("Prisma quote acceptance creates an unpaid order with exact conversation identity", async () => {
+  const quote = prismaQuote();
+  const { service, calls } = setupPrismaQuoteAcceptance(quote);
+  const result = await service.handlePrismaInboundQuoteAcceptance({
+    operationId: "prisma-quote-accept",
+    claimToken: "prisma-quote-owner",
+    operationResult: { stage: "routed" },
+    conversation: conversation(),
+    message: { id: "message-quote-accept" },
+    route: { id: "route-quote-accept" },
+    payload: { text: "确认，就按这个做" },
+  });
+
+  assert.equal(result.plan.type, "quote_accepted");
+  assert.equal(calls.quoteUpdates.length, 1);
+  assert.equal(calls.quoteUpdates[0].data.status, "accepted");
+  assert.equal(calls.quoteUpdates[0].data.paymentStatus, "unpaid");
+  assert.equal(calls.orderCreates.length, 1);
+  assert.equal(calls.orderCreates[0].quoteId, quote.id);
+  assert.deepEqual(calls.orderCreates[0].expected, {
+    expectedWechatAccountId: "account-a",
+    expectedConversationId: "conversation-a",
+    expectedCustomerId: "customer-a",
+  });
+  assert.equal(calls.orderCreates[0].options.inboundFence.operationId, "prisma-quote-accept");
+  assert.equal(calls.orderCreates[0].options.inboundFence.claimToken, "prisma-quote-owner");
+  assert.deepEqual(calls.orderCreates[0].options.inboundFence.operationResult, { stage: "routed" });
+  assert.equal(calls.orderCreates[0].options.notificationEffectKey, "prisma-quote-accept:order-draft-created-notification");
+  assert.equal(calls.finishes[0][0].orderCreatedNotificationAlreadySent, true);
+  assert.equal(calls.fences.length, 2);
+  assert.equal(calls.fences[0].where.claimToken, "prisma-quote-owner");
+  assert.equal(calls.fences[1].data.result.recoveryEffect.phase, "quote_committed_pending_order");
+  assert.match(calls.fences[1].data.result.recoveryEffect.orderBusinessFingerprint, /^[a-f0-9]{64}$/);
+  assert.equal(calls.orderCreates[0].options.inboundFence.recoveryEffect.phase, "quote_committed_pending_order");
+  assert.equal(
+    calls.orderCreates[0].options.inboundFence.orderBusinessFingerprint,
+    calls.fences[1].data.result.recoveryEffect.orderBusinessFingerprint,
+  );
+  assert.equal(calls.operationAdvances.length, 0);
+  assert.equal(calls.reviews.length, 0);
+});
+
+test("Prisma quote acceptance resumes the exact persisted order after a post-quote crash", async () => {
+  const acceptedOrder = {
+    id: "order-prisma-recovered",
+    quoteDraftId: "quote-prisma",
+    designJobId: "job-quote",
+    wechatAccountId: "account-a",
+    conversationId: "conversation-a",
+    customerId: "customer-a",
+    status: "pending",
+    paymentStatus: "unpaid",
+    totalPrice: 1000,
+  };
+  const quote = prismaQuote({ status: "accepted", orderDraft: acceptedOrder });
+  const { service, calls } = setupPrismaQuoteAcceptance(quote);
+  const orderBusinessFingerprint = createOrderDraftBusinessFingerprint(acceptedOrder);
+  const acceptancePlan = {
+    ok: true,
+    hasIntent: true,
+    action: "accept_quote_and_create_order",
+    reason: "quote_accepted",
+    quotePatch: { status: "accepted", paymentStatus: "unpaid" },
+  };
+  const result = await service.handlePrismaInboundQuoteAcceptance({
+    operationId: "prisma-quote-recovery",
+    claimToken: "prisma-quote-recovery-owner",
+    operationResult: {
+      recoveryEffect: {
+        kind: "low_value_quote_acceptance",
+        phase: "quote_committed_pending_order",
+        quoteDraftId: quote.id,
+        orderBusinessFingerprint,
+        acceptancePlan,
+        routeEvaluationId: "route-quote-recovery",
+      },
+    },
+    conversation: conversation(),
+    message: { id: "message-quote-recovery" },
+    route: { id: "route-quote-recovery" },
+    payload: { text: "确认，就按这个做" },
+  });
+
+  assert.equal(result.orderDraft.id, acceptedOrder.id);
+  assert.equal(calls.orderCreates.length, 1);
+  assert.equal(calls.quoteUpdates.length, 0);
+  assert.equal(calls.fences.length, 0);
+  assert.equal(calls.orderCreates[0].options.inboundFence.operationId, "prisma-quote-recovery");
+  assert.equal(calls.orderCreates[0].options.inboundFence.recoveryEffect.quoteDraftId, quote.id);
+  assert.equal(calls.operationAdvances.length, 0);
+  assert.equal(calls.finishes[0][0].orderCreatedNotificationAlreadySent, true);
+});
+
+test("Prisma committed quote recovery reads the original order without upserting changed quote values", async () => {
+  const acceptedOrder = {
+    id: "order-prisma-committed",
+    quoteDraftId: "quote-prisma",
+    designJobId: "job-quote",
+    wechatAccountId: "account-a",
+    conversationId: "conversation-a",
+    customerId: "customer-a",
+    selectedImageId: "new-1",
+    quantity: 100,
+    unitPrice: 10,
+    totalPrice: 1000,
+    totalCost: 800,
+    profit: 200,
+    status: "pending",
+    paymentStatus: "unpaid",
+  };
+  const quote = prismaQuote({
+    status: "accepted",
+    unitPrice: 99,
+    totalPrice: 9900,
+    profit: 9100,
+    orderDraft: acceptedOrder,
+  });
+  const { service, calls } = setupPrismaQuoteAcceptance(quote);
+  const orderBusinessFingerprint = createOrderDraftBusinessFingerprint(acceptedOrder);
+  const result = await service.handlePrismaInboundQuoteAcceptance({
+    operationId: "prisma-quote-committed-recovery",
+    claimToken: "prisma-quote-committed-owner",
+    operationResult: {
+      recoveryEffect: {
+        kind: "low_value_quote_acceptance",
+        phase: "quote_and_order_committed",
+        quoteDraftId: quote.id,
+        orderDraftId: acceptedOrder.id,
+        orderBusinessFingerprint,
+        acceptancePlan: {
+          ok: true,
+          action: "accept_quote_and_create_order",
+          reason: "quote_accepted",
+          quotePatch: { status: "accepted", paymentStatus: "unpaid" },
+        },
+        routeEvaluationId: "route-quote-committed-recovery",
+      },
+    },
+    conversation: conversation(),
+    message: { id: "message-quote-committed-recovery" },
+    route: { id: "route-quote-committed-recovery" },
+    payload: { text: "确认" },
+  });
+
+  assert.equal(result.orderDraft.id, acceptedOrder.id);
+  assert.equal(result.orderDraft.totalPrice, 1000);
+  assert.equal(calls.orderCreates.length, 0);
+  assert.equal(calls.fences.length, 0);
+  assert.equal(calls.finishes[0][0].orderCreatedNotificationAlreadySent, false);
+});
+
+test("Prisma payment claim never changes an existing order without server ledger proof", async () => {
+  const quote = prismaQuote({
+    orderDraft: {
+      id: "order-existing",
+      status: "pending",
+      paymentStatus: "unpaid",
+      totalPrice: 1000,
+    },
+  });
+  const { service, calls } = setupPrismaQuoteAcceptance(quote);
+  const result = await service.handlePrismaInboundQuoteAcceptance({
+    operationId: "prisma-payment-claim",
+    claimToken: "prisma-payment-owner",
+    conversation: conversation(),
+    message: { id: "message-payment-claim" },
+    route: { id: "route-payment-claim" },
+    payload: { text: "定金已经付了" },
+  });
+
+  assert.equal(result.plan.type, "quote_payment_claim_manual_review");
+  assert.equal(result.plan.reason, "payment_claim_needs_manual_verification");
+  assert.equal(calls.orderCreates.length, 0);
+  assert.equal(calls.finishes.length, 0);
+  assert.equal(calls.quoteUpdates.length, 1);
+  assert.equal(calls.quoteUpdates[0].data.status, "manual_review");
+  assert.equal(calls.reviews.length, 1);
 });
 
 test("Prisma high-value image selection enters manual review and never auto-progresses", async () => {

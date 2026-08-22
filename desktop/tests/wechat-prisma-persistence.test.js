@@ -15,6 +15,10 @@ const { appConfig } = require("../apps/api/src/shared/app-config");
 const { LocalStoreService } = require("../apps/api/src/local-store/local-store.service");
 const { WechatPersistence } = require("../apps/api/src/wechat/wechat-persistence");
 const { WechatDispatchService } = require("../apps/api/src/wechat/wechat-dispatch.service");
+const {
+  sealWechatWorkEventCode,
+  wechatWorkEventCodeHash,
+} = require("../apps/api/src/wechat-work/wechat-work-event-code");
 
 test("local-json and Prisma expose the same account/conversation identity shape", async (t) => {
   t.after(() => {
@@ -89,6 +93,16 @@ test("Prisma WeChat persistence keeps idempotency, indexes, transactions and swi
   assert.match(importer, /prisma\.\$transaction\(actions\.slice/);
   assert.match(importer, /prisma\.wechatWorkBinding\.upsert/);
   assert.match(importer, /prisma\.wechatWorkAuditLog\.upsert/);
+  assert.match(importer, /prisma\.designJob\.upsert/);
+  assert.match(importer, /prisma\.designImageCandidate\.upsert/);
+  assert.match(importer, /prisma\.quoteDraft\.upsert/);
+  assert.match(importer, /normalizeSendAttemptStatus/);
+  assert.match(importer, /localImportOriginalStatus/);
+  assert.match(importer, /localImportStructuredEvent/);
+  assert.ok(
+    importer.indexOf("prisma.designJob.upsert") < importer.indexOf("prisma.wechatSendTask.upsert"),
+    "design dependencies must be imported before send tasks",
+  );
   assert.match(readStateMigration, /TIMESTAMP\(3\)/);
   assert.doesNotMatch(readStateMigration, /DATETIME/);
   assert.match(pkg.scripts["prisma:wechat:import"], /migrate-wechat-local-json-to-prisma/);
@@ -206,6 +220,53 @@ test("Prisma sync cursor uses compare-and-swap and rejects stale expected cursor
     }),
     /stale cursor commit/,
   );
+});
+
+test("Prisma event credential transaction atomically creates one send task", async (t) => {
+  t.after(() => { appConfig.useLocalStore = true; });
+  appConfig.useLocalStore = false;
+  const database = createEventCredentialPrisma();
+  const first = database.persistence.createWechatWorkEventSendTaskFromCredential({
+    ...database.params,
+    operationKey: "send-msg-on-event:prisma-atomic-a",
+  });
+  const second = database.persistence.createWechatWorkEventSendTaskFromCredential({
+    ...database.params,
+    operationKey: "send-msg-on-event:prisma-atomic-b",
+  });
+
+  const results = await Promise.allSettled([first, second]);
+  const successes = results.filter((item) => item.status === "fulfilled" && item.value?.task);
+  const misses = results.filter((item) => item.status === "fulfilled" && item.value === null);
+
+  assert.equal(successes.length, 1);
+  assert.equal(misses.length, 1);
+  assert.equal(database.state.tasks.size, 1);
+  const audit = database.state.audits.get(database.credentialId);
+  assert.equal(audit.status, "consumed");
+  assert.equal(audit.sendTaskId, successes[0].value.task.id);
+  assert.equal("eventCodeSecret" in audit.metadata, false);
+  assert.equal(audit.metadata.eventCredentialSecretStored, false);
+  assert.equal(successes[0].value.task.payload.eventCodeSecret.alg, "aes-256-gcm");
+});
+
+test("Prisma expired event credential commits secret cleanup before rejecting", async (t) => {
+  t.after(() => { appConfig.useLocalStore = true; });
+  appConfig.useLocalStore = false;
+  const database = createEventCredentialPrisma({
+    expiresAt: new Date(Date.now() - 1000).toISOString(),
+  });
+
+  await assert.rejects(
+    () => database.persistence.createWechatWorkEventSendTaskFromCredential(database.params),
+    /事件响应凭证已过期/,
+  );
+
+  const audit = database.state.audits.get(database.credentialId);
+  assert.equal(audit.status, "expired");
+  assert.equal("eventCodeSecret" in audit.metadata, false);
+  assert.equal(audit.metadata.eventCredentialSecretStored, false);
+  assert.equal(database.state.tasks.size, 0);
 });
 
 test("Prisma mode creates isolated Enterprise WeChat identity bindings without touching local JSON", async (t) => {
@@ -435,6 +496,424 @@ test("Prisma Enterprise WeChat canonical binding rejects conflicting customer hi
   );
   assert.equal(database.state.writeCount, writesBefore);
 });
+
+test("LocalStore send claim atomically rejects a stale inbound reply before creating an attempt", () => {
+  const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-local-send-claim-"));
+  const localStore = new LocalStoreService();
+  localStore.filePath = path.join(localRoot, "store.json");
+  const binding = localStore.upsertWechatWorkBinding({
+    openKfid: "wk-local-atomic-claim",
+    externalUserId: "wm-local-atomic-claim",
+  });
+  const conversation = localStore.listConversations()
+    .find((item) => item.id === binding.conversationId);
+  const oldInbound = localStore.createMessage({
+    id: "local-inbound-old",
+    conversationId: conversation.id,
+    direction: "inbound",
+    text: "旧问题",
+    createdAt: "2026-08-19T00:00:00.000Z",
+  });
+  const task = localStore.createSendTask({
+    operationKey: "local-atomic-send-claim",
+    wechatAccountId: conversation.wechatAccountId,
+    conversationId: conversation.id,
+    customerId: conversation.customerId,
+    payload: { kind: "text", text: "旧问题回复", inboundMessageId: oldInbound.id },
+    guardSnapshot: { status: "passed", checks: [], requiredChecks: [], policy: "single-account-serial-queue" },
+  });
+  const newInbound = localStore.createMessage({
+    id: "local-inbound-new",
+    conversationId: conversation.id,
+    direction: "inbound",
+    text: "新问题",
+    createdAt: "2026-08-19T00:00:01.000Z",
+  });
+  const claim = (latestInboundMessageId) => localStore.claimQueuedSendTaskAndCreateAttempt({
+    taskId: task.id,
+    taskPatch: { status: "sending" },
+    attempt: { adapter: "dry_run", status: "started", guardStatus: "passed" },
+    claimGuard: {
+      requireAccountQueueHead: true,
+      wechatAccountId: conversation.wechatAccountId,
+      conversationId: conversation.id,
+      customerId: conversation.customerId,
+      latestInboundMessageId,
+    },
+  });
+
+  assert.equal(claim(oldInbound.id), null);
+  assert.equal(localStore.getSendTask(task.id).status, "queued");
+  assert.equal(localStore.listSendAttempts({ sendTaskId: task.id }).length, 0);
+  const accepted = claim(newInbound.id);
+  assert.equal(accepted.task.status, "sending");
+  assert.equal(localStore.listSendAttempts({ sendTaskId: task.id }).length, 1);
+  fs.rmSync(localRoot, { recursive: true, force: true });
+});
+
+test("Prisma send claim checks account queue head and latest inbound inside its transaction", async (t) => {
+  t.after(() => { appConfig.useLocalStore = true; });
+  appConfig.useLocalStore = false;
+  const state = {
+    tasks: new Map([
+      ["send-oldest", { id: "send-oldest", status: "queued", wechatAccountId: "account-claim", conversationId: "conversation-claim", queuedAt: new Date(1), createdAt: new Date(1) }],
+      ["send-target", { id: "send-target", status: "queued", wechatAccountId: "account-claim", conversationId: "conversation-claim", queuedAt: new Date(2), createdAt: new Date(2) }],
+    ]),
+    latestInboundId: "inbound-new",
+    attempts: new Map(),
+    lockOrder: [],
+  };
+  const sendTaskModel = {
+    async findUnique({ where }) { return state.tasks.get(where.id) || null; },
+    async findFirst({ where }) {
+      const tasks = [...state.tasks.values()].filter((task) => (
+        task.wechatAccountId === where.wechatAccountId
+        && task.status === where.status
+        && (!where.id?.not || task.id !== where.id.not)
+      ));
+      return tasks.sort((a, b) => Number(a.queuedAt) - Number(b.queuedAt))[0] || null;
+    },
+    async updateMany({ where, data }) {
+      const task = state.tasks.get(where.id);
+      if (!task || task.status !== where.status) return { count: 0 };
+      state.tasks.set(task.id, { ...task, ...data });
+      return { count: 1 };
+    },
+  };
+  const attemptModel = {
+    async create({ data }) {
+      const record = { id: `attempt-${state.attempts.size + 1}`, ...data };
+      state.attempts.set(record.id, record);
+      return record;
+    },
+    async findUnique({ where }) { return state.attempts.get(where.id) || null; },
+  };
+  const tx = {
+    wechatAccount: {
+      async updateMany({ where }) {
+        state.lockOrder.push(`account:${where.id}`);
+        return { count: where.id === "account-claim" ? 1 : 0 };
+      },
+    },
+    wechatSendTask: sendTaskModel,
+    wechatSendAttempt: attemptModel,
+    conversation: {
+      async updateMany({ where }) {
+        state.lockOrder.push(`conversation:${where.id}`);
+        return { count: where.id === "conversation-claim" && where.wechatAccountId === "account-claim" ? 1 : 0 };
+      },
+      async findUnique() { return { customerId: "customer-claim" }; },
+    },
+    message: { async findFirst() { return { id: state.latestInboundId }; } },
+  };
+  const prisma = {
+    wechatSendTask: sendTaskModel,
+    wechatSendAttempt: attemptModel,
+    quoteDraft: { async findMany() { return []; } },
+    async $transaction(callback) { return callback(tx); },
+  };
+  const persistence = new WechatPersistence(prisma, {});
+  const claim = (latestInboundMessageId) => persistence.claimQueuedTaskAndCreateAttempt({
+    taskId: "send-target",
+    taskPatch: { status: "sending" },
+    attempt: { adapter: "dry_run", status: "started" },
+    claimGuard: {
+      requireAccountQueueHead: true,
+      wechatAccountId: "account-claim",
+      conversationId: "conversation-claim",
+      customerId: "customer-claim",
+      latestInboundMessageId,
+    },
+  });
+
+  assert.equal(await claim("inbound-new"), null);
+  state.tasks.get("send-oldest").status = "sent";
+  assert.equal(await claim("inbound-old"), null);
+  const accepted = await claim("inbound-new");
+  assert.equal(accepted.task.status, "sending");
+  assert.equal(state.attempts.size, 1);
+  assert.deepEqual(state.lockOrder.slice(-2), ["account:account-claim", "conversation:conversation-claim"]);
+});
+
+test("Prisma official send claim skips the shared account lock while keeping exact conversation identity", async (t) => {
+  t.after(() => { appConfig.useLocalStore = true; });
+  appConfig.useLocalStore = false;
+  const task = {
+    id: "send-immediate-customer-b",
+    status: "queued",
+    wechatAccountId: "account-shared",
+    conversationId: "conversation-b",
+    customerId: "customer-b",
+    queuedAt: new Date(),
+    createdAt: new Date(),
+    conversation: {
+      id: "conversation-b",
+      wechatAccountId: "account-shared",
+      customerId: "customer-b",
+      customer: { id: "customer-b" },
+    },
+  };
+  let accountLockCalls = 0;
+  let conversationLockCalls = 0;
+  let queueHeadReads = 0;
+  const sendTaskModel = {
+    async findUnique({ where }) { return where.id === task.id ? task : null; },
+    async findFirst() { queueHeadReads += 1; return { id: "older-other-customer-task" }; },
+    async updateMany({ where, data }) {
+      if (where.id !== task.id || task.status !== where.status) return { count: 0 };
+      Object.assign(task, data);
+      return { count: 1 };
+    },
+  };
+  const prisma = {
+    wechatSendTask: sendTaskModel,
+    wechatSendAttempt: {
+      async create({ data }) { return { id: "attempt-immediate-customer-b", ...data }; },
+      async findUnique() { return { id: "attempt-immediate-customer-b", sendTaskId: task.id }; },
+    },
+    quoteDraft: { async findMany() { return []; } },
+    async $transaction(callback) {
+      return callback({
+        wechatSendTask: sendTaskModel,
+        wechatSendAttempt: this.wechatSendAttempt,
+        wechatAccount: {
+          async updateMany() { accountLockCalls += 1; return { count: 1 }; },
+        },
+        conversation: {
+          async updateMany({ where }) {
+            conversationLockCalls += 1;
+            return { count: where.id === task.conversationId ? 1 : 0 };
+          },
+          async findUnique() { return { customerId: task.customerId }; },
+        },
+        message: { async findFirst() { return null; } },
+      });
+    },
+  };
+  const persistence = new WechatPersistence(prisma, {});
+
+  const claimed = await persistence.claimQueuedTaskAndCreateAttempt({
+    taskId: task.id,
+    taskPatch: { status: "sending" },
+    attempt: { adapter: "wechat_work_kf", status: "started" },
+    claimGuard: {
+      requireAccountQueueHead: false,
+      wechatAccountId: task.wechatAccountId,
+      conversationId: task.conversationId,
+      customerId: task.customerId,
+    },
+  });
+
+  assert.equal(claimed.task.status, "sending");
+  assert.equal(accountLockCalls, 0);
+  assert.equal(conversationLockCalls, 1);
+  assert.equal(queueHeadReads, 0);
+});
+
+test("Prisma specialist selection serializes on the customer binding and leaves one current specialist", async (t) => {
+  t.after(() => { appConfig.useLocalStore = true; });
+  appConfig.useLocalStore = false;
+  const binding = {
+    openKfid: "wk-specialist-lock",
+    externalUserId: "wm-specialist-lock",
+    wechatAccountId: "account-specialist-lock",
+    conversationId: "conversation-specialist-lock",
+    customerId: "customer-specialist-lock",
+  };
+  const upgrades = new Map();
+  const model = {
+    async findUnique({ where }) { return upgrades.get(where.id) || null; },
+    async create({ data }) { const record = { ...data }; upgrades.set(record.id, record); return record; },
+    async updateMany({ where, data }) {
+      if (where.id?.not) {
+        let count = 0;
+        for (const [id, record] of upgrades) {
+          if (
+            id !== where.id.not
+            && record.openKfid === where.openKfid
+            && record.externalUserId === where.externalUserId
+            && where.status.in.includes(record.status)
+          ) {
+            upgrades.set(id, { ...record, ...data, version: Number(record.version || 0) + 1 });
+            count += 1;
+          }
+        }
+        return { count };
+      }
+      const record = upgrades.get(where.id);
+      if (!record || Number(record.version) !== Number(where.version)) return { count: 0 };
+      upgrades.set(record.id, { ...record, ...data });
+      return { count: 1 };
+    },
+  };
+  const tx = {
+    wechatWorkBinding: {
+      async updateMany() { return { count: 1 }; },
+      async findUnique() { return binding; },
+    },
+    wechatWorkCustomerUpgrade: model,
+  };
+  let transactionTail = Promise.resolve();
+  const prisma = {
+    wechatWorkCustomerUpgrade: model,
+    $transaction(callback) {
+      const current = transactionTail.then(() => callback(tx));
+      transactionTail = current.catch(() => {});
+      return current;
+    },
+  };
+  const persistence = new WechatPersistence(prisma, {});
+  const payload = (id, memberUserId) => ({
+    id,
+    claimToken: `claim-${id}`,
+    corpId: "corp-specialist-lock",
+    ...binding,
+    memberUserId,
+    state: `state-${id}`,
+  });
+
+  const [first, second] = await Promise.all([
+    persistence.claimWechatWorkCustomerUpgrade(payload("upgrade-first", "member-first")),
+    persistence.claimWechatWorkCustomerUpgrade(payload("upgrade-second", "member-second")),
+  ]);
+  assert.equal(first.mode, "claimed");
+  assert.equal(second.mode, "claimed");
+  assert.equal(upgrades.get("upgrade-first").status, "superseded");
+  assert.equal(upgrades.get("upgrade-second").status, "creating");
+  assert.equal([...upgrades.values()].filter((item) => item.status !== "superseded").length, 1);
+});
+
+function createEventCredentialPrisma(options = {}) {
+  const credentialId = "event-credential-prisma";
+  const eventCode = "prisma-event-code";
+  const identity = {
+    wechatAccountId: "wechat-prisma-1",
+    conversationId: "conversation-prisma-1",
+    customerId: "customer-prisma-1",
+  };
+  const binding = {
+    openKfid: "wk-prisma-event",
+    externalUserId: "wm-prisma-event",
+  };
+  const state = {
+    audits: new Map(),
+    tasks: new Map(),
+    conversations: new Map(),
+  };
+  state.conversations.set(identity.conversationId, {
+    id: identity.conversationId,
+    wechatAccountId: identity.wechatAccountId,
+    customerId: identity.customerId,
+    customer: { id: identity.customerId },
+    wechatAccount: { id: identity.wechatAccountId },
+  });
+  state.audits.set(credentialId, {
+    id: credentialId,
+    action: "event_reply_credential",
+    status: "pending",
+    ...identity,
+    ...binding,
+    sendTaskId: null,
+    metadata: {
+      eventCodeHash: wechatWorkEventCodeHash(eventCode),
+      eventCodeSecret: sealWechatWorkEventCode(eventCode),
+      expiresAt: options.expiresAt || new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString(),
+      ttlMs: 48 * 60 * 60 * 1000,
+    },
+  });
+
+  let transactionQueue = Promise.resolve();
+  const prisma = {
+    async $transaction(callback) {
+      const run = transactionQueue.then(async () => {
+        const working = cloneEventCredentialState(state);
+        const result = await callback(createEventCredentialTx(working, options));
+        state.audits = working.audits;
+        state.tasks = working.tasks;
+        state.conversations = working.conversations;
+        return result;
+      });
+      transactionQueue = run.catch(() => null);
+      return run;
+    },
+    quoteDraft: { async findMany() { return []; } },
+  };
+  return {
+    credentialId,
+    state,
+    params: {
+      credentialId,
+      operationKey: "send-msg-on-event:prisma-event",
+      identity,
+      binding,
+      payload: {
+        kind: "wechat_work_event_text",
+        text: "Prisma 事件响应",
+      },
+      guardSnapshot: {
+        source: "wechat_work_kf_event",
+        eventCredentialSingleUse: true,
+      },
+    },
+    persistence: new WechatPersistence(prisma, {}),
+  };
+}
+
+function createEventCredentialTx(state, options = {}) {
+  return {
+    wechatWorkAuditLog: {
+      async findUnique({ where }) {
+        return state.audits.get(where.id) || null;
+      },
+      async updateMany({ where, data }) {
+        const current = state.audits.get(where.id);
+        if (!current) return { count: 0 };
+        for (const [key, value] of Object.entries(where)) {
+          if (key === "id") continue;
+          if (current[key] !== value) return { count: 0 };
+        }
+        state.audits.set(where.id, { ...current, ...data });
+        return { count: 1 };
+      },
+    },
+    wechatSendTask: {
+      async findUnique({ where }) {
+        return state.tasks.get(where.id) || null;
+      },
+      async create({ data }) {
+        if (options.failTaskCreate) throw new Error("injected task create failure");
+        if (state.tasks.has(data.id)) throw new Error("unique constraint");
+        const conversation = state.conversations.get(data.conversationId) || null;
+        const task = {
+          ...data,
+          conversation,
+          wechatAccount: conversation?.wechatAccount || null,
+          designJob: null,
+          attempts: [],
+        };
+        state.tasks.set(data.id, task);
+        return task;
+      },
+    },
+    conversation: {
+      async findUnique({ where }) {
+        return state.conversations.get(where.id) || null;
+      },
+    },
+  };
+}
+
+function cloneEventCredentialState(source) {
+  return {
+    audits: new Map([...source.audits.entries()].map(([key, value]) => [key, deepClone(value)])),
+    tasks: new Map([...source.tasks.entries()].map(([key, value]) => [key, deepClone(value)])),
+    conversations: new Map([...source.conversations.entries()].map(([key, value]) => [key, deepClone(value)])),
+  };
+}
+
+function deepClone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
 
 function createCanonicalBindingPrisma(options = {}) {
   const state = {

@@ -3,16 +3,42 @@
 const { app, BrowserWindow, Notification, WebContentsView, ipcMain, nativeTheme, session } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
-const { PackagedServiceManager } = require("./packaged-runtime");
+const { PackagedServiceManager, desktopEnvRequiresEnterpriseSetup } = require("./packaged-runtime");
 const { createDesktopSessionRefreshWatcher } = require("./desktop-session-refresh");
 const {
+  createZhenxiEmbeddedActivationStatus,
   createZhenxiDesktopDeviceInfo,
   normalizeZhenxiEmbeddedBounds,
   normalizeZhenxiEmbeddedUrl,
   resolveZhenxiDesktopLayout,
 } = require("./zhenxi-embedded-view");
+const {
+  ZHENXI_ACCESS_COOKIE,
+  ZHENXI_REFRESH_COOKIE,
+  applyZhenxiSharedSessionRequestHeaders,
+  isZhenxiSessionMutationUrl,
+  publicZhenxiSharedSessionStatus,
+  readZhenxiSharedSession,
+} = require("./zhenxi-shared-session");
 
-const WEB_URL = process.env.WEB_URL || "http://127.0.0.1:3100/overview";
+// Customer-service workstations often run vendor GPU drivers that Chromium cannot initialize.
+// The app does not require 3D rendering, so prefer a reliable software-rendered startup.
+// Some locked-down Windows hosts also block Chromium's renderer sandbox from spawning.
+app.commandLine.appendSwitch("no-sandbox");
+app.disableHardwareAcceleration();
+app.commandLine.appendSwitch("disable-gpu");
+app.commandLine.appendSwitch("disable-gpu-compositing");
+app.commandLine.appendSwitch("disable-gpu-sandbox");
+app.commandLine.appendSwitch("disable-accelerated-2d-canvas");
+app.commandLine.appendSwitch("disable-accelerated-video-decode");
+app.commandLine.appendSwitch("disable-zero-copy");
+app.commandLine.appendSwitch("in-process-gpu");
+app.commandLine.appendSwitch("disable-crash-reporter");
+
+const DEFAULT_WEB_URL = "http://127.0.0.1:3100/overview";
+let webUrl = normalizeSmartKefuWebUrl(process.env.WEB_URL)
+  || requestedWebUrlFromCommandLine(process.argv)
+  || DEFAULT_WEB_URL;
 const APP_TITLE = process.env.DESKTOP_APP_TITLE || "智能体客服工作台";
 const DESKTOP_SESSION_COOKIE = "smart_kefu_desktop_session";
 const DESKTOP_SESSION_PROOF_PATTERN = /^[a-f0-9]{64}$/i;
@@ -23,10 +49,20 @@ const DESKTOP_SESSION_PARTITION = DESKTOP_INSTANCE_ID === "default"
 const ZHENXI_EMBEDDED_PARTITION = DESKTOP_INSTANCE_ID === "default"
   ? "persist:smart-kefu-zhenxi-ai"
   : `persist:smart-kefu-zhenxi-ai-${DESKTOP_INSTANCE_ID}`;
+const DESKTOP_RUNTIME_DIR = path.resolve(process.env.DESKTOP_RUNTIME_DIR || app.getPath("userData"));
+const DESKTOP_INSTANCE_STATUS_FILE = path.join(DESKTOP_RUNTIME_DIR, `electron-${DESKTOP_INSTANCE_ID}.status.json`);
+const DESKTOP_INSTANCE_REQUEST_FILE = path.join(DESKTOP_RUNTIME_DIR, `electron-${DESKTOP_INSTANCE_ID}.request.json`);
+const ZHENXI_EMBEDDED_LOAD_TIMEOUT_MS = 20_000;
+const ZHENXI_SHARED_SESSION_OPTIONS = {
+  appData: app.getPath("appData"),
+  sessionFile: process.env.ZHENXI_SHARED_SESSION_FILE,
+};
 
 let mainWindow = null;
 let packagedServices = null;
 let namedInstanceLockFile = null;
+let desktopInstanceStatusTimer = null;
+let handledDesktopInstanceRequestId = "";
 let desktopSessionRefreshWatcher = null;
 let zhenxiEmbeddedView = null;
 let zhenxiEmbeddedAttached = false;
@@ -35,12 +71,35 @@ let zhenxiEmbeddedLoading = false;
 let zhenxiEmbeddedError = "";
 let zhenxiEmbeddedLayout = null;
 const zhenxiDesktopDevice = createZhenxiDesktopDeviceInfo();
-let zhenxiActivation = { checked: false, active: false, reason: "unknown", deviceIdSuffix: zhenxiDesktopDevice.id.slice(-10), errorMessage: "" };
-let zhenxiActivationCheckedAt = 0;
+let zhenxiSharedSessionRecord = readZhenxiSharedSession(ZHENXI_SHARED_SESSION_OPTIONS);
+let zhenxiSharedSession = publicZhenxiSharedSessionStatus(zhenxiSharedSessionRecord);
 
 function normalizeDesktopInstanceId(value) {
   const normalized = String(value || "default").trim().toLowerCase();
   return /^[a-z0-9][a-z0-9-]{0,31}$/.test(normalized) ? normalized : "default";
+}
+
+function normalizeSmartKefuWebUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw || raw.length > 2048) return "";
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== "http:") return "";
+    if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(parsed.hostname.toLowerCase())) return "";
+    if (Number(parsed.port || 80) !== 3100) return "";
+    parsed.username = "";
+    parsed.password = "";
+    return parsed.href;
+  } catch {
+    return "";
+  }
+}
+
+function requestedWebUrlFromCommandLine(commandLine) {
+  const args = Array.isArray(commandLine) ? commandLine : [];
+  const prefix = "--smart-kefu-web-url=";
+  const value = args.find((arg) => String(arg || "").startsWith(prefix));
+  return normalizeSmartKefuWebUrl(value ? String(value).slice(prefix.length) : "");
 }
 
 function acquireNamedInstanceLock() {
@@ -105,11 +164,85 @@ function startupErrorHtml(message) {
 <head><meta charset="utf-8" /><title>${APP_TITLE}</title></head>
 <body style="font-family:Segoe UI,Microsoft YaHei,sans-serif;padding:32px;background:#f5f5f7;color:#1d1d1f">
   <h2>${APP_TITLE} 启动失败</h2>
-  <p>无法打开 ${escapeHtml(WEB_URL)}</p>
+  <p>无法打开 ${escapeHtml(webUrl)}</p>
   <pre style="white-space:pre-wrap;background:#fff;border:1px solid #d2d2d7;border-radius:8px;padding:16px">${escapeHtml(message)}</pre>
   <p>${recoveryMessage}</p>
 </body></html>`,
   )}`;
+}
+
+function writeDesktopInstanceStatus() {
+  try {
+    const currentUrl = mainWindow && !mainWindow.isDestroyed()
+      ? normalizeSmartKefuWebUrl(mainWindow.webContents.getURL())
+      : "";
+    fs.mkdirSync(DESKTOP_RUNTIME_DIR, { recursive: true });
+    fs.writeFileSync(DESKTOP_INSTANCE_STATUS_FILE, `${JSON.stringify({
+      pid: process.pid,
+      instanceId: DESKTOP_INSTANCE_ID,
+      webUrl,
+      currentUrl,
+      visible: Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()),
+      handledRequestId: handledDesktopInstanceRequestId,
+      updatedAt: new Date().toISOString(),
+    })}\n`, "utf8");
+  } catch {}
+}
+
+function processDesktopInstanceRequest() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    const request = JSON.parse(fs.readFileSync(DESKTOP_INSTANCE_REQUEST_FILE, "utf8"));
+    const requestId = String(request?.requestId || "").trim();
+    const requestedUrl = normalizeSmartKefuWebUrl(request?.webUrl);
+    if (!/^[a-f0-9]{16,64}$/i.test(requestId) || !requestedUrl || requestId === handledDesktopInstanceRequestId) return;
+    webUrl = requestedUrl;
+    handledDesktopInstanceRequestId = requestId;
+    destroyZhenxiEmbeddedView();
+    loadMainWindowUrl();
+    showMainWindow();
+    writeDesktopInstanceStatus();
+  } catch {}
+}
+
+function startDesktopInstanceStatusHeartbeat() {
+  writeDesktopInstanceStatus();
+  if (desktopInstanceStatusTimer) return;
+  desktopInstanceStatusTimer = setInterval(() => {
+    processDesktopInstanceRequest();
+    writeDesktopInstanceStatus();
+  }, 500);
+  desktopInstanceStatusTimer.unref();
+}
+
+function stopDesktopInstanceStatusHeartbeat() {
+  if (desktopInstanceStatusTimer) clearInterval(desktopInstanceStatusTimer);
+  desktopInstanceStatusTimer = null;
+  try {
+    const status = JSON.parse(fs.readFileSync(DESKTOP_INSTANCE_STATUS_FILE, "utf8"));
+    if (Number(status?.pid) === process.pid) fs.rmSync(DESKTOP_INSTANCE_STATUS_FILE, { force: true });
+  } catch {}
+}
+
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.setSkipTaskbar(false);
+  if (!mainWindow.isVisible()) mainWindow.show();
+  mainWindow.moveTop();
+  mainWindow.focus();
+  writeDesktopInstanceStatus();
+}
+
+function loadMainWindowUrl() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const targetWindow = mainWindow;
+  writeDesktopInstanceStatus();
+  targetWindow.loadURL(webUrl).then(writeDesktopInstanceStatus).catch((error) => {
+    if (mainWindow !== targetWindow || targetWindow.isDestroyed()) return;
+    targetWindow.loadURL(startupErrorHtml(error?.message || error || "unknown error"));
+    writeDesktopInstanceStatus();
+  });
 }
 
 function escapeHtml(value) {
@@ -130,7 +263,7 @@ function createMainWindow() {
     title: APP_TITLE,
     backgroundColor: windowBackgroundColor(),
     autoHideMenuBar: true,
-    show: false,
+    show: true,
     ...(process.platform === "darwin"
       ? {
           titleBarStyle: "hiddenInset",
@@ -148,13 +281,18 @@ function createMainWindow() {
     },
   });
 
-  mainWindow.loadURL(WEB_URL).catch((error) => {
-    if (!mainWindow) return;
-    mainWindow.loadURL(startupErrorHtml(error?.message || error || "unknown error"));
+  loadMainWindowUrl();
+  mainWindow.once("ready-to-show", showMainWindow);
+  mainWindow.webContents.on("did-finish-load", showMainWindow);
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    console.error(`[desktop] renderer process gone reason=${details?.reason || "unknown"}`);
+    setTimeout(() => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      loadMainWindowUrl();
+      showMainWindow();
+    }, 250).unref();
   });
-  mainWindow.once("ready-to-show", () => {
-    if (mainWindow) mainWindow.show();
-  });
+  setTimeout(showMainWindow, 3000).unref();
   mainWindow.on("closed", () => {
     destroyZhenxiEmbeddedView();
     mainWindow = null;
@@ -163,6 +301,14 @@ function createMainWindow() {
 
 function ensureZhenxiEmbeddedView() {
   if (zhenxiEmbeddedView && !zhenxiEmbeddedView.webContents.isDestroyed()) return zhenxiEmbeddedView;
+  if (zhenxiEmbeddedView) {
+    try { mainWindow?.contentView.removeChildView(zhenxiEmbeddedView); } catch {}
+    zhenxiEmbeddedView = null;
+    zhenxiEmbeddedAttached = false;
+  }
+  const sharedDeviceId = String(zhenxiSharedSessionRecord?.deviceId || "").trim();
+  const embeddedDeviceId = sharedDeviceId || zhenxiDesktopDevice.id;
+  const embeddedActivationStatus = createZhenxiEmbeddedActivationStatus(embeddedDeviceId);
   const view = new WebContentsView({
     webPreferences: {
       partition: ZHENXI_EMBEDDED_PARTITION,
@@ -172,11 +318,13 @@ function ensureZhenxiEmbeddedView() {
       sandbox: true,
       spellcheck: false,
       additionalArguments: [
-        `--art-device-id=${encodeURIComponent(zhenxiDesktopDevice.id)}`,
+        `--art-device-id=${encodeURIComponent(embeddedDeviceId)}`,
         `--art-device-label=${encodeURIComponent(zhenxiDesktopDevice.label)}`,
+        `--art-activation-status=${encodeURIComponent(JSON.stringify(embeddedActivationStatus))}`,
       ],
     },
   });
+  installZhenxiSharedSessionPolicy(view.webContents.session);
   view.setBackgroundColor(windowBackgroundColor());
   view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   view.webContents.on("will-navigate", (event, url) => {
@@ -197,6 +345,17 @@ function ensureZhenxiEmbeddedView() {
     zhenxiEmbeddedLoading = false;
     zhenxiEmbeddedError = `${description || "臻希 AI 页面加载失败"} (${code})`;
     if (validatedUrl && !zhenxiEmbeddedUrl) zhenxiEmbeddedUrl = String(validatedUrl);
+  });
+  view.webContents.on("render-process-gone", (_event, details) => {
+    zhenxiEmbeddedLoading = false;
+    zhenxiEmbeddedError = `臻希 AI 内置渲染进程已退出（${details?.reason || "unknown"}），正在恢复。`;
+    setTimeout(() => {
+      if (zhenxiEmbeddedView !== view) return;
+      try { mainWindow?.contentView.removeChildView(view); } catch {}
+      try { view.webContents.close(); } catch {}
+      zhenxiEmbeddedView = null;
+      zhenxiEmbeddedAttached = false;
+    }, 0).unref();
   });
   zhenxiEmbeddedView = view;
   return view;
@@ -230,8 +389,8 @@ function destroyZhenxiEmbeddedView() {
   zhenxiEmbeddedLoading = false;
   zhenxiEmbeddedError = "";
   zhenxiEmbeddedLayout = null;
-  zhenxiActivation = { checked: false, active: false, reason: "unknown", deviceIdSuffix: zhenxiDesktopDevice.id.slice(-10), errorMessage: "" };
-  zhenxiActivationCheckedAt = 0;
+  zhenxiSharedSessionRecord = readZhenxiSharedSession(ZHENXI_SHARED_SESSION_OPTIONS);
+  zhenxiSharedSession = publicZhenxiSharedSessionStatus(zhenxiSharedSessionRecord);
 }
 
 function zhenxiEmbeddedStatus() {
@@ -248,7 +407,7 @@ function zhenxiEmbeddedStatus() {
           logicalViewportWidth: zhenxiEmbeddedLayout.logicalViewportWidth,
         }
       : { mode: "desktop", zoomFactor: 1, logicalViewportWidth: 1440 },
-    activation: { ...zhenxiActivation },
+    sharedSession: { ...zhenxiSharedSession },
   };
 }
 
@@ -259,6 +418,23 @@ function applyZhenxiDesktopLayout(view, bounds) {
   view.setBounds(layout.bounds);
   view.webContents.setZoomFactor(layout.zoomFactor);
   return true;
+}
+
+async function loadZhenxiEmbeddedUrl(view, url) {
+  let timeout = null;
+  try {
+    await Promise.race([
+      view.webContents.loadURL(url),
+      new Promise((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error("臻希 AI 内置页面载入超时。")), ZHENXI_EMBEDDED_LOAD_TIMEOUT_MS);
+      }),
+    ]);
+  } catch (error) {
+    try { view.webContents.stop(); } catch {}
+    throw error;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 async function discoverZhenxiReleaseDesktop() {
@@ -292,43 +468,43 @@ async function probeZhenxiReleaseDesktop(origin) {
   }
 }
 
-async function refreshZhenxiActivation(force = false) {
-  const normalizedUrl = normalizeZhenxiEmbeddedUrl(zhenxiEmbeddedUrl);
-  if (!normalizedUrl) return zhenxiEmbeddedStatus();
-  if (!force && zhenxiActivationCheckedAt && Date.now() - zhenxiActivationCheckedAt < 10_000) {
-    return zhenxiEmbeddedStatus();
-  }
-  zhenxiActivationCheckedAt = Date.now();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5_000);
-  try {
-    const endpoint = new URL("/api/activation/status", normalizedUrl);
-    const response = await fetch(endpoint, {
-      headers: { "x-art-device-id": zhenxiDesktopDevice.id },
-      redirect: "error",
-      signal: controller.signal,
+function installZhenxiSharedSessionPolicy(targetSession) {
+  const filter = { urls: ["<all_urls>"] };
+  targetSession.webRequest.onBeforeRequest(filter, (details, callback) => {
+    const trustedUrl = normalizeZhenxiEmbeddedUrl(details.url);
+    if (trustedUrl && isZhenxiSessionMutationUrl(trustedUrl)) {
+      callback({ cancel: true });
+      return;
+    }
+    callback({ cancel: false });
+  });
+  targetSession.webRequest.onBeforeSendHeaders(filter, (details, callback) => {
+    const trustedUrl = normalizeZhenxiEmbeddedUrl(details.url);
+    if (!trustedUrl) {
+      callback({ requestHeaders: details.requestHeaders });
+      return;
+    }
+    const shared = readZhenxiSharedSession(ZHENXI_SHARED_SESSION_OPTIONS);
+    callback({
+      requestHeaders: applyZhenxiSharedSessionRequestHeaders(details.requestHeaders, shared),
     });
-    const payload = await response.json();
-    const data = payload && typeof payload === "object" && payload.data && typeof payload.data === "object" ? payload.data : {};
-    zhenxiActivation = {
-      checked: response.ok && payload?.ok === true,
-      active: data.active === true,
-      reason: typeof data.reason === "string" ? data.reason : response.ok ? "unknown" : `http_${response.status}`,
-      deviceIdSuffix: typeof data.deviceIdSuffix === "string" && data.deviceIdSuffix ? data.deviceIdSuffix : zhenxiDesktopDevice.id.slice(-10),
-      errorMessage: response.ok ? "" : `HTTP ${response.status}`,
-    };
-  } catch (error) {
-    zhenxiActivation = {
-      ...zhenxiActivation,
-      checked: false,
-      active: false,
-      reason: "status_unavailable",
-      errorMessage: error instanceof Error ? error.message : "activation status unavailable",
-    };
-  } finally {
-    clearTimeout(timer);
-  }
+  });
+}
+
+function refreshZhenxiSharedSession() {
+  zhenxiSharedSessionRecord = readZhenxiSharedSession(ZHENXI_SHARED_SESSION_OPTIONS);
+  zhenxiSharedSession = publicZhenxiSharedSessionStatus(zhenxiSharedSessionRecord);
+  if (!zhenxiSharedSession.authenticated) hideZhenxiEmbeddedView();
   return zhenxiEmbeddedStatus();
+}
+
+async function clearZhenxiEmbeddedLoginCookies(targetSession, targetUrl) {
+  const origin = normalizeZhenxiEmbeddedUrl(targetUrl);
+  if (!origin) return;
+  await Promise.all([
+    targetSession.cookies.remove(origin, ZHENXI_ACCESS_COOKIE),
+    targetSession.cookies.remove(origin, ZHENXI_REFRESH_COOKIE),
+  ]).catch(() => undefined);
 }
 
 function assertTrustedMainWindowSender(event) {
@@ -338,7 +514,9 @@ function assertTrustedMainWindowSender(event) {
 }
 
 async function startApplication() {
-  let webSessionProof = String(process.env.DESKTOP_WEB_SESSION_PROOF || "").trim();
+  const desktopSessionFile = resolveDesktopSessionFile();
+  let webSessionProof = String(process.env.DESKTOP_WEB_SESSION_PROOF || "").trim()
+    || readDesktopSessionProof(desktopSessionFile);
   if (app.isPackaged) {
     packagedServices = new PackagedServiceManager({
       executablePath: process.execPath,
@@ -346,18 +524,40 @@ async function startApplication() {
       appPath: app.getAppPath(),
       userDataPath: app.getPath("userData"),
     });
-    await packagedServices.start();
+    const endpoints = await packagedServices.start();
+    webUrl = endpoints.webOverviewUrl;
+    const desktopEnvFile = path.join(app.getPath("userData"), "config", "runtime.env");
+    if (desktopEnvRequiresEnterpriseSetup({ envFile: desktopEnvFile })) {
+      webUrl = new URL("/integrations/wechat-work/settings?onboarding=1", endpoints.webOverviewUrl).toString();
+    }
     webSessionProof = packagedServices.webSessionProof;
   }
   await installDesktopSessionCookie(webSessionProof);
   createMainWindow();
-  startDesktopSessionRefreshWatcher(webSessionProof);
+  startDesktopSessionRefreshWatcher(webSessionProof, desktopSessionFile);
+}
+
+function resolveDesktopSessionFile() {
+  const configured = String(process.env.DESKTOP_WEB_SESSION_FILE || "").trim();
+  if (configured) return path.resolve(configured);
+  if (app.isPackaged) return "";
+  return path.resolve(__dirname, "../..", ".runtime-stable", "desktop-web-session.json");
+}
+
+function readDesktopSessionProof(sessionFile) {
+  if (!sessionFile) return "";
+  try {
+    const proof = String(JSON.parse(fs.readFileSync(sessionFile, "utf8"))?.proof || "").trim();
+    return DESKTOP_SESSION_PROOF_PATTERN.test(proof) ? proof : "";
+  } catch {
+    return "";
+  }
 }
 
 async function installDesktopSessionCookie(proof) {
   const value = String(proof || "").trim();
   if (!DESKTOP_SESSION_PROOF_PATTERN.test(value)) return false;
-  const target = new URL(WEB_URL);
+  const target = new URL(webUrl);
   const hostname = target.hostname.toLowerCase();
   if (target.protocol !== "http:" && target.protocol !== "https:") return false;
   if (hostname !== "127.0.0.1" && hostname !== "localhost" && hostname !== "[::1]" && hostname !== "::1") {
@@ -375,9 +575,8 @@ async function installDesktopSessionCookie(proof) {
   return true;
 }
 
-function startDesktopSessionRefreshWatcher(initialProof) {
+function startDesktopSessionRefreshWatcher(initialProof, sessionFile) {
   if (app.isPackaged || desktopSessionRefreshWatcher) return;
-  const sessionFile = String(process.env.DESKTOP_WEB_SESSION_FILE || "").trim();
   if (!sessionFile) return;
   desktopSessionRefreshWatcher = createDesktopSessionRefreshWatcher({
     sessionFile,
@@ -394,9 +593,9 @@ async function reloadMainWindowWhenWebReady() {
   for (let attempt = 0; attempt < 90; attempt += 1) {
     if (!mainWindow || mainWindow.isDestroyed()) return false;
     try {
-      const response = await fetch(WEB_URL, { cache: "no-store", redirect: "manual" });
+      const response = await fetch(webUrl, { cache: "no-store", redirect: "manual" });
       if (response.status >= 200 && response.status < 400) {
-        await mainWindow.loadURL(WEB_URL);
+        await mainWindow.loadURL(webUrl);
         return true;
       }
     } catch {}
@@ -411,13 +610,23 @@ const ownsSingleInstance = DESKTOP_INSTANCE_ID === "default"
 if (!ownsSingleInstance) {
   app.quit();
 } else {
-  app.on("second-instance", () => {
-    if (!mainWindow) return;
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
+  app.on("second-instance", (_event, commandLine) => {
+    const requestedWebUrl = requestedWebUrlFromCommandLine(commandLine);
+    if (requestedWebUrl) webUrl = requestedWebUrl;
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      createMainWindow();
+    } else {
+      destroyZhenxiEmbeddedView();
+      loadMainWindowUrl();
+    }
+    showMainWindow();
+    writeDesktopInstanceStatus();
   });
 
-  app.whenReady().then(startApplication).catch((error) => {
+  app.whenReady().then(async () => {
+    startDesktopInstanceStatusHeartbeat();
+    await startApplication();
+  }).catch((error) => {
     console.error("[desktop] packaged services failed", error);
     createMainWindow();
     if (mainWindow) mainWindow.loadURL(startupErrorHtml(error?.message || error || "unknown error"));
@@ -428,6 +637,7 @@ if (!ownsSingleInstance) {
 }
 
 app.on("before-quit", () => {
+  stopDesktopInstanceStatusHeartbeat();
   desktopSessionRefreshWatcher?.stop();
   desktopSessionRefreshWatcher = null;
   releaseNamedInstanceLock();
@@ -456,20 +666,25 @@ ipcMain.handle("zhenxi-embedded:open", async (event, payload) => {
   const bounds = normalizeZhenxiEmbeddedBounds(payload?.bounds);
   if (!url) return { ...zhenxiEmbeddedStatus(), ok: false, errorMessage: "不允许加载此臻希 AI 地址。" };
   if (!bounds) return { ...zhenxiEmbeddedStatus(), ok: false, errorMessage: "臻希 AI 内嵌区域尺寸无效。" };
+  refreshZhenxiSharedSession();
+  if (!zhenxiSharedSession.authenticated) {
+    return { ...zhenxiEmbeddedStatus(), ok: false, errorMessage: "" };
+  }
   if (!attachZhenxiEmbeddedView()) return { ...zhenxiEmbeddedStatus(), ok: false, errorMessage: "客服主窗口当前不可用。" };
+  await clearZhenxiEmbeddedLoginCookies(zhenxiEmbeddedView.webContents.session, url);
   applyZhenxiDesktopLayout(zhenxiEmbeddedView, bounds);
   if (zhenxiEmbeddedUrl !== url || zhenxiEmbeddedView.webContents.getURL() !== url) {
     zhenxiEmbeddedUrl = url;
     zhenxiEmbeddedLoading = true;
     zhenxiEmbeddedError = "";
     try {
-      await zhenxiEmbeddedView.webContents.loadURL(url);
+      await loadZhenxiEmbeddedUrl(zhenxiEmbeddedView, url);
     } catch (error) {
       zhenxiEmbeddedLoading = false;
       zhenxiEmbeddedError = error instanceof Error ? error.message : "臻希 AI 页面加载失败。";
     }
   }
-  return refreshZhenxiActivation(true);
+  return refreshZhenxiSharedSession();
 });
 
 ipcMain.handle("zhenxi-embedded:discover-desktop", async (event) => {
@@ -487,15 +702,17 @@ ipcMain.handle("zhenxi-embedded:set-bounds", async (event, payload) => {
 
 ipcMain.handle("zhenxi-embedded:reload", async (event) => {
   assertTrustedMainWindowSender(event);
+  refreshZhenxiSharedSession();
+  if (!zhenxiSharedSession.authenticated) return zhenxiEmbeddedStatus();
   if (!zhenxiEmbeddedView || zhenxiEmbeddedView.webContents.isDestroyed()) return zhenxiEmbeddedStatus();
   zhenxiEmbeddedError = "";
   zhenxiEmbeddedView.webContents.reload();
-  return refreshZhenxiActivation(true);
+  return refreshZhenxiSharedSession();
 });
 
 ipcMain.handle("zhenxi-embedded:status", async (event) => {
   assertTrustedMainWindowSender(event);
-  return refreshZhenxiActivation(false);
+  return refreshZhenxiSharedSession();
 });
 
 ipcMain.handle("zhenxi-embedded:hide", async (event) => {

@@ -212,6 +212,17 @@ export function OperationsOverview({
                       <span className={styles.launchMeta}>{item.phaseLabel}</span>
                       <span className={styles.launchMeta}>{item.ownerLabel}</span>
                       <span className={`${styles.state} ${styles[item.tone]}`}>{item.statusLabel}</span>
+                      <button
+                        type="button"
+                        className={styles.linkButton}
+                        data-action-id={`overview.launch-${item.id}.open`}
+                        data-disabled-reason={busy ? "运营数据正在刷新，请稍候" : undefined}
+                        onClick={item.onClick}
+                        disabled={busy}
+                        aria-label={`处理上线计划：${item.title}`}
+                      >
+                        去处理<ChevronRight size={15} aria-hidden="true" />
+                      </button>
                     </div>
                   );
                 })}

@@ -12,10 +12,11 @@ export type EmbeddedStatus = {
     zoomFactor: number;
     logicalViewportWidth: number;
   };
-  activation: {
+  sharedSession: {
     checked: boolean;
-    active: boolean;
-    reason: string;
+    authenticated: boolean;
+    source: "external-zhenxi-desktop" | string;
+    updatedAt: string;
     deviceIdSuffix: string;
     errorMessage: string;
   };
@@ -46,12 +47,18 @@ export function configuredLocalZhenxiUrl(response: DesignPlatformConfigResponse)
 
 export function preferredHealthyLocalUrl(response: DesignPlatformCandidateProbeResponse) {
   for (const candidate of response.candidates) {
-    const normalized = candidate.ok ? normalizeLocalZhenxiUrl(candidate.baseUrl) : "";
+    const normalized = candidate.ok && candidate.generationReady !== false ? normalizeLocalZhenxiUrl(candidate.baseUrl) : "";
     if (normalized && isZhenxiReleaseDesktopUrl(normalized)) return normalized;
   }
   const recommended = normalizeLocalZhenxiUrl(response.recommendedBaseUrl);
-  if (recommended && response.candidates.some((candidate) => candidate.ok && normalizeLocalZhenxiUrl(candidate.baseUrl) === recommended)) {
+  if (recommended && response.candidates.some((candidate) =>
+    candidate.ok && candidate.generationReady !== false && normalizeLocalZhenxiUrl(candidate.baseUrl) === recommended
+  )) {
     return recommended;
+  }
+  for (const candidate of response.candidates) {
+    const normalized = candidate.ok && candidate.generationReady !== false ? normalizeLocalZhenxiUrl(candidate.baseUrl) : "";
+    if (normalized) return normalized;
   }
   for (const candidate of response.candidates) {
     const normalized = candidate.ok ? normalizeLocalZhenxiUrl(candidate.baseUrl) : "";
@@ -83,6 +90,14 @@ export function normalizeLocalZhenxiUrl(value: string) {
   }
 }
 
+export function normalizeEmbeddedZhenxiUrl(value: string) {
+  return normalizeLocalZhenxiUrl(value);
+}
+
+export function isLocalZhenxiUrl(value: string) {
+  return Boolean(normalizeLocalZhenxiUrl(value));
+}
+
 export function embeddedBounds(element: HTMLDivElement | null): EmbeddedBounds | null {
   if (!element) return null;
   const rect = element.getBoundingClientRect();
@@ -95,4 +110,11 @@ export function embeddedBounds(element: HTMLDivElement | null): EmbeddedBounds |
     width,
     height,
   };
+}
+
+export function embeddedModeLabel(status: EmbeddedStatus | null, bridgeAvailable: boolean | null, serviceOnline: boolean) {
+  if (status?.layout.mode === "desktop") return `桌面端 · ${status.layout.logicalViewportWidth}px`;
+  if (bridgeAvailable === false) return "浏览器内置 · 本机镜像";
+  if (serviceOnline) return "等待桌面内置";
+  return "未连接";
 }

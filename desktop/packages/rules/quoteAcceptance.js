@@ -7,6 +7,7 @@ function planInboundQuoteAcceptance(input = {}, options = {}) {
   const quote = input.quote || null;
   const existingOrderDraft = input.existingOrderDraft || null;
   const intent = detectQuoteAcceptanceIntent(text);
+  const businessRiskDisabled = options.businessRiskControlsDisabled === true;
 
   if (!intent.hasIntent) {
     return skip("no_quote_acceptance_intent", { hasIntent: false });
@@ -18,7 +19,7 @@ function planInboundQuoteAcceptance(input = {}, options = {}) {
   const orderDraft = existingOrderDraft || quote.orderDraft || null;
   if (orderDraft) {
     if (!intent.paymentStatus) return skip("already_has_order_draft", { hasIntent: true });
-    if (isHighValueQuoteOrOrder({ quote, orderDraft, designJob, highValueAmount })) {
+    if (!businessRiskDisabled && isHighValueQuoteOrOrder({ quote, orderDraft, designJob, highValueAmount })) {
       return skip("manual_review_required", { hasIntent: true });
     }
     if (!isPaymentUpgrade(orderDraft.paymentStatus || quote.paymentStatus, intent.paymentStatus)) {
@@ -56,17 +57,17 @@ function planInboundQuoteAcceptance(input = {}, options = {}) {
 
   if (!quoteSent && !intent.paymentStatus) return skip("quote_not_sent", { hasIntent: true });
   if (!quote.selectedImageId) return skip("missing_selected_image", { hasIntent: true });
-  if (Number.isFinite(profit) && profit < 0) return skip("negative_profit", { hasIntent: true });
+  if (!businessRiskDisabled && Number.isFinite(profit) && profit < 0) return skip("negative_profit", { hasIntent: true });
   if (!designJob?.id) return skip("missing_design_job", { hasIntent: true });
-  if (
+  if (!businessRiskDisabled && (
     designJob.isHighValue ||
     isHighValueBudget(designJob.budget, highValueAmount) ||
     (Number.isFinite(totalPrice) && totalPrice >= highValueAmount) ||
     (Number.isFinite(unitPrice) && unitPrice >= highValueAmount)
-  ) {
+  )) {
     return skip("manual_review_required", { hasIntent: true });
   }
-  if (designJob.conversation?.manualLocked || designJob.manualLocked) {
+  if (!businessRiskDisabled && (designJob.conversation?.manualLocked || designJob.manualLocked)) {
     return skip("conversation_manual_locked", { hasIntent: true });
   }
   if (!designJob.wechatAccountId || !designJob.conversationId) {

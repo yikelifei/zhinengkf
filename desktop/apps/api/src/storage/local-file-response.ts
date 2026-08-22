@@ -23,9 +23,10 @@ export function applySafeLocalFileHeaders(reply: HeaderReply, file: LocalFileRes
 }
 
 function isSafeInlineMime(mimeType: string) {
-  return ["image/png", "image/jpeg", "image/webp", "image/gif", "image/bmp", "application/pdf"].includes(
-    String(mimeType || "").toLowerCase(),
-  );
+  const normalized = String(mimeType || "").toLowerCase();
+  return ["image/png", "image/jpeg", "image/webp", "image/gif", "image/bmp", "application/pdf"].includes(normalized)
+    || normalized.startsWith("audio/")
+    || normalized.startsWith("video/");
 }
 
 function sanitizeFileName(value: string) {

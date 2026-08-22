@@ -32,6 +32,11 @@ export type SkuBatchUpdatePayload = {
   };
 };
 
+export type SkuDeleteResult = {
+  deletedSku: SkuPayload & { id?: string };
+  removedAssetCount: number;
+};
+
 export type BundleRecommendPayload = {
   budget: {
     mode?: "per_box" | "total" | "unknown";

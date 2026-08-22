@@ -38,15 +38,19 @@ const ports = {
   web: Number(process.env.WEB_PORT || 3100),
   api: Number(process.env.API_PORT || 3200),
   mock: Number(process.env.MOCK_DESIGN_PLATFORM_PORT || 3700),
+  zhenxiBrowserEmbed: Number(process.env.ZHENXI_BROWSER_EMBED_PORT || 3710),
 };
 const windowsProcessQueryTimeoutMs = positiveNumber(process.env.WINDOWS_PROCESS_QUERY_TIMEOUT_MS, 1000);
+const portOwnerStartupGraceMs = positiveNumber(process.env.STABLE_PORT_OWNER_STARTUP_GRACE_MS, 15000);
 const specs = [
   webServiceSpec(),
   { name: "design-platform-mock", command: process.execPath, args: [path.join(root, "tools", "mock-design-platform.js")], port: ports.mock, expected: normalize(path.join(root, "tools", "mock-design-platform.js")) },
+  { name: "zhenxi-browser-embed", command: process.execPath, args: [path.join(root, "tools", "zhenxi-browser-embed-proxy.js")], port: ports.zhenxiBrowserEmbed, expected: normalize(path.join(root, "tools", "zhenxi-browser-embed-proxy.js")), env: { ZHENXI_BROWSER_EMBED_PORT: String(ports.zhenxiBrowserEmbed) } },
   { name: "api", command: process.execPath, args: [path.join(root, "dist", "apps", "api", "main.js")], port: ports.api, expected: normalize(path.join(root, "dist", "apps", "api", "main.js")) },
 ].filter(Boolean);
 
 const children = new Map();
+const portOwnerFirstSeenAt = new Map();
 let launcherLockOwned = false;
 const runtimeKeepAlive = setInterval(() => undefined, 60000);
 runtimeKeepAlive.ref();
@@ -95,7 +99,10 @@ function installProcessHandlers() {
     });
   }
 
-  process.on("uncaughtException", (error) => append("stable-runtime", `uncaughtException ${error.stack || error.message || error}`));
+  process.on("uncaughtException", (error) => {
+    append("stable-runtime", `uncaughtException ${error.stack || error.message || error}`);
+    process.exit(1);
+  });
   process.on("unhandledRejection", (error) => append("stable-runtime", `unhandledRejection ${error?.stack || error?.message || error}`));
   process.on("beforeExit", (code) => append("stable-runtime", `beforeExit code=${code}`));
   process.on("exit", (code) => append("stable-runtime", `exit code=${code}`));
@@ -107,6 +114,7 @@ function ensureService(spec) {
     return;
   }
   const owners = getPortOwnerPids(spec.port);
+  rememberPortOwners(spec, owners);
   const existing = children.get(spec.name);
   if (existing && isPidAlive(existing.pid) && process.platform === "win32" && spec.port) return;
   if (existing && owners.includes(existing.pid)) return;
@@ -122,6 +130,10 @@ function ensureService(spec) {
       append(spec.name, `port ${spec.port} owner ${pid} command unavailable; accepted by health check`);
       return false;
     }
+    if (portOwnerWithinStartupGrace(spec, pid)) {
+      append(spec.name, `port ${spec.port} owner ${pid} is inside startup grace; waiting for health check before isolation`);
+      return false;
+    }
     return true;
   });
   if (wrongOwners.length) {
@@ -135,6 +147,7 @@ function ensureService(spec) {
   }
   const unmanagedOwners = owners.filter((pid) => {
     if (portHealthMatches(spec)) return false;
+    if (portOwnerWithinStartupGrace(spec, pid)) return false;
     if (!existing) return true;
     if (pid === existing.pid) return false;
     return !(ownerMatches(pid, spec.expected) === true && isDescendantPid(pid, existing.pid));
@@ -144,8 +157,29 @@ function ensureService(spec) {
     for (const pid of unmanagedOwners) killPid(pid);
     return;
   }
+  if (!existing && owners.length && owners.every((pid) => portOwnerWithinStartupGrace(spec, pid))) {
+    append(spec.name, `port ${spec.port} owner(s) ${owners.join(",")} are starting; deferring duplicate launch`);
+    return;
+  }
   if (existing && isPidAlive(existing.pid)) return;
   startService(spec);
+}
+
+function rememberPortOwners(spec, owners) {
+  const prefix = `${spec.name}:${spec.port}:`;
+  const active = new Set(owners.map((pid) => `${prefix}${pid}`));
+  for (const key of [...portOwnerFirstSeenAt.keys()]) {
+    if (key.startsWith(prefix) && !active.has(key)) portOwnerFirstSeenAt.delete(key);
+  }
+  for (const pid of owners) {
+    const key = `${prefix}${pid}`;
+    if (!portOwnerFirstSeenAt.has(key)) portOwnerFirstSeenAt.set(key, Date.now());
+  }
+}
+
+function portOwnerWithinStartupGrace(spec, pid) {
+  const firstSeenAt = portOwnerFirstSeenAt.get(`${spec.name}:${spec.port}:${pid}`) || 0;
+  return firstSeenAt > 0 && Date.now() - firstSeenAt < portOwnerStartupGraceMs;
 }
 
 function ensureProcessService(spec) {
@@ -281,7 +315,7 @@ function serviceEnv(port, serviceName, overrides = {}) {
     FORCE_WEB_CLEAN_BUILD: "0",
     ALLOW_LOCAL_BROWSER_WEB_API: process.env.ALLOW_LOCAL_BROWSER_WEB_API === "0" ? "0" : "1",
     SMART_KEFU_RUNTIME_TARGET: process.env.SMART_KEFU_RUNTIME_TARGET || "desktop",
-    USE_LOCAL_STORE: "true",
+    USE_LOCAL_STORE: "false",
     DESKTOP_RUNTIME_DIR: runtimeDir,
     LOCAL_STORE_FILE: localStoreFile,
     LOCAL_STORAGE_ROOT: storageRoot,
@@ -292,10 +326,16 @@ function serviceEnv(port, serviceName, overrides = {}) {
     WEB_PORT: String(ports.web),
     API_PORT: String(ports.api),
     MOCK_DESIGN_PLATFORM_PORT: String(ports.mock),
+    ZHENXI_BROWSER_EMBED_PORT: String(ports.zhenxiBrowserEmbed),
     DESIGN_PLATFORM_RUNTIME_CONFIG: designConfigFile,
   };
-  delete baseEnv.DESIGN_PLATFORM_ADAPTER;
-  delete baseEnv.DESIGN_PLATFORM_BASE_URL;
+  if (process.env.FORCE_MOCK_DESIGN_START === "1") {
+    baseEnv.DESIGN_PLATFORM_ADAPTER = "standard_v1";
+    baseEnv.DESIGN_PLATFORM_BASE_URL = `http://127.0.0.1:${ports.mock}`;
+  } else {
+    delete baseEnv.DESIGN_PLATFORM_ADAPTER;
+    delete baseEnv.DESIGN_PLATFORM_BASE_URL;
+  }
   const internalEnv = internalApiServiceEnv(baseEnv, serviceName, internalApiToken);
   const desktopSessionEnv = desktopWebSessionServiceEnv(internalEnv, serviceName, desktopWebSession.proof);
   return selectServiceEnvironment(serviceName, desktopSessionEnv, overrides);
@@ -317,8 +357,11 @@ function acquireSingleInstanceLock() {
       if (error?.code !== "EEXIST") throw error;
       const existingPid = readLockPid();
       const existingIsAlive = existingPid > 0 && isPidAlive(existingPid);
+      const existingHasFreshHeartbeat = existingPid > 0 && freshHeartbeatMatchesPid(existingPid);
       const lockAgeMs = fileAgeMs(lockFile);
-      if (existingIsAlive || (!existingPid && lockAgeMs < 5000)) {
+      const existingIsCurrent = existingIsAlive && existingHasFreshHeartbeat;
+      const existingIsInitializing = existingIsAlive && lockAgeMs < 5000;
+      if (existingIsCurrent || existingIsInitializing || (!existingPid && lockAgeMs < 5000)) {
         console.log(`[stable-runtime] existing launcher pid=${existingPid || "initializing"}; exiting duplicate`);
         process.exit(0);
       }
@@ -353,6 +396,10 @@ function fileAgeMs(filePath) {
 
 function isCurrentStableRuntimeLauncher(pid) {
   if (!isStableRuntimeLauncherPid(pid)) return false;
+  return freshHeartbeatMatchesPid(pid);
+}
+
+function freshHeartbeatMatchesPid(pid) {
   const heartbeat = readJsonFile(heartbeatFile);
   const heartbeatPid = Number(heartbeat?.pid);
   const heartbeatUpdatedAt = Date.parse(String(heartbeat?.updatedAt || ""));
@@ -402,6 +449,10 @@ function portHealthMatches(spec) {
   if (spec.name === "design-platform-mock") {
     const json = requestJson(`http://127.0.0.1:${spec.port}/v1/health`);
     return json?.ok === true && json?.service === "mock-design-platform";
+  }
+  if (spec.name === "zhenxi-browser-embed") {
+    const json = requestJson(`http://127.0.0.1:${spec.port}/__smart_kefu_embed_health`);
+    return json?.ok === true && json?.service === "zhenxi-browser-embed-proxy";
   }
   if (spec.name === "web") {
     const json = requestJson(`http://127.0.0.1:${spec.port}/api/health`, [

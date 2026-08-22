@@ -12,6 +12,7 @@ const {
 const args = new Set(process.argv.slice(2));
 const waitMs = numberArg("--wait-ms", args.has("--wait") ? 90000 : 0);
 const intervalMs = numberArg("--interval-ms", 2000);
+const allowDesignUnavailable = args.has("--allow-design-unavailable");
 const desktopRoot = path.resolve(__dirname, "..");
 const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
   ? path.resolve(process.env.DESKTOP_RUNTIME_DIR)
@@ -19,6 +20,8 @@ const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
 const webPort = numberEnv("WEB_PORT", 3100);
 const apiPort = numberEnv("API_PORT", 3200);
 const mockPort = numberEnv("MOCK_DESIGN_PLATFORM_PORT", 3700);
+const zhenxiBrowserEmbedPort = numberEnv("ZHENXI_BROWSER_EMBED_PORT", 3710);
+const requiredServicePorts = [webPort, apiPort, mockPort, zhenxiBrowserEmbedPort];
 const windowsProcessQueryTimeoutMs = numberEnv("WINDOWS_PROCESS_QUERY_TIMEOUT_MS", 3000);
 const keepAliveHeartbeatFile = path.join(runtimeDir, "keep-alive.json");
 const desktopWebSessionFile = resolveDesktopWebSessionFile(runtimeDir);
@@ -30,6 +33,7 @@ const nextStartServerPath = path.join(desktopRoot, "node_modules", "next", "dist
 const requiredFiles = [
   ["package.json", path.join(desktopRoot, "package.json")],
   ["API build", path.join(desktopRoot, "dist", "apps", "api", "main.js")],
+  ["Zhenxi browser embed proxy", path.join(desktopRoot, "tools", "zhenxi-browser-embed-proxy.js")],
 ];
 
 const endpoints = [
@@ -43,8 +47,15 @@ const endpoints = [
     "Design integration",
     `http://127.0.0.1:${apiPort}/api/integrations/design-platform/health`,
     (result) => result.statusCode === 200 && result.json?.ok === true,
+    { warnWhenFailed: allowDesignUnavailable },
   ],
   ["Mock design platform", `http://127.0.0.1:${mockPort}/v1/health`, (result) => result.statusCode === 200 && result.json?.ok === true],
+  [
+    "Zhenxi browser embed",
+    `http://127.0.0.1:${zhenxiBrowserEmbedPort}/__smart_kefu_embed_health`,
+    (result) => result.statusCode === 200 && result.json?.ok === true && result.json?.service === "zhenxi-browser-embed-proxy",
+    { warnWhenFailed: allowDesignUnavailable },
+  ],
 ];
 
 main().catch((error) => {
@@ -79,9 +90,9 @@ async function collectReport() {
   for (const [label, filePath] of requiredFiles) checks.push(checkFile(label, filePath));
   checks.push(checkWebStartable());
 
-  const portOwners = getPortOwners([webPort, apiPort, mockPort]);
+  const portOwners = getPortOwners(requiredServicePorts);
   checks.push(checkStableRuntimeVersion(portOwners));
-  for (const port of [webPort, apiPort, mockPort]) {
+  for (const port of requiredServicePorts) {
     const owners = portOwners.get(port) || [];
     checks.push({
       ok: owners.length > 0,
@@ -92,10 +103,12 @@ async function collectReport() {
   checks.push(checkWebRuntimeOwner(portOwners.get(webPort) || []));
   checks.push(checkKeepAliveHeartbeat(portOwners));
 
-  for (const [label, url, isOk] of endpoints) {
+  for (const [label, url, isOk, options = {}] of endpoints) {
     const result = await requestJson(url, 3000);
+    const ok = isOk(result);
     checks.push({
-      ok: isOk(result),
+      ok,
+      severity: !ok && options.warnWhenFailed ? "warn" : undefined,
       label,
       detail: describeHttpResult(url, result),
     });
@@ -236,8 +249,8 @@ function checkStableRuntimeVersion(portOwners = new Map()) {
   let launchers = stableRuntimeLauncherFromHeartbeat();
   if (!launchers.length) launchers = findStableRuntimeLauncherProcesses();
   if (!launchers.length) {
-    const directServicePids = [webPort, apiPort, mockPort].flatMap((port) => portOwners.get(port) || []);
-    if (directServicePids.length >= 3) {
+    const directServicePids = requiredServicePorts.flatMap((port) => portOwners.get(port) || []);
+    if (directServicePids.length >= requiredServicePorts.length) {
       return {
         ok: true,
         label: "Stable runtime version",
@@ -397,7 +410,7 @@ function checkKeepAliveHeartbeat(portOwners) {
     const heartbeat = JSON.parse(fs.readFileSync(keepAliveHeartbeatFile, "utf8"));
     const updatedAtMs = Date.parse(String(heartbeat.updatedAt || ""));
     const ageMs = Date.now() - updatedAtMs;
-    const missingPorts = [webPort, apiPort, mockPort].filter((port) => !(portOwners.get(port) || []).length);
+    const missingPorts = requiredServicePorts.filter((port) => !(portOwners.get(port) || []).length);
     const ok = heartbeat.mode === "mock" && Number.isFinite(updatedAtMs) && ageMs <= 15000;
     if (ok && missingPorts.length) {
       return {
@@ -431,7 +444,7 @@ function checkKeepAliveHeartbeat(portOwners) {
         : `direct service mode; stale or wrong heartbeat ignored: ${JSON.stringify(heartbeat)}`,
     };
   } catch (error) {
-    const missingPorts = [webPort, apiPort, mockPort].filter((port) => !(portOwners.get(port) || []).length);
+    const missingPorts = requiredServicePorts.filter((port) => !(portOwners.get(port) || []).length);
     if (missingPorts.length) {
       return {
         ok: true,

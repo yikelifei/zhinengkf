@@ -379,6 +379,11 @@
   background: #dcfce7;
 }
 
+.statusWarning {
+  color: #92400e;
+  background: #fef3c7;
+}
+
 .statusDanger {
   color: #991b1b;
   background: #fee2e2;
@@ -770,6 +775,100 @@
   font-size: 12px;
 }
 
+.setupWizard {
+  border-color: color-mix(in srgb, var(--wk-color-brand, #2457d6) 28%, var(--wk-color-border, #dfe5ee));
+  background: linear-gradient(180deg, #f8fbff 0, #fff 180px);
+}
+
+.setupSteps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 18px;
+  padding: 0;
+  list-style: none;
+}
+
+.setupSteps li {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--wk-color-border, #dfe5ee);
+  border-radius: 12px;
+  color: var(--wk-color-text-muted, #667085);
+  background: #fff;
+}
+
+.setupSteps li b {
+  display: grid;
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 50%;
+  color: #475467;
+  background: #eef2f7;
+  font-size: 12px;
+}
+
+.setupSteps li[data-active="true"] {
+  border-color: color-mix(in srgb, var(--wk-color-brand, #2457d6) 58%, white);
+  color: var(--wk-color-brand, #2457d6);
+  background: color-mix(in srgb, var(--wk-color-brand, #2457d6) 6%, white);
+}
+
+.setupSteps li[data-active="true"] b,
+.setupSteps li[data-complete="true"] b {
+  color: #fff;
+  background: var(--wk-color-brand, #2457d6);
+}
+
+.setupBody {
+  display: grid;
+  gap: 14px;
+}
+
+.setupGuidance {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 12px;
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.setupGuidance svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.setupGuidance p {
+  margin: 4px 0 7px;
+}
+
+.setupGuidance a {
+  color: inherit;
+  font-weight: 700;
+}
+
+.setupWizard button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.spinning {
+  animation: setup-spin 0.9s linear infinite;
+}
+
+@keyframes setup-spin {
+  to { transform: rotate(360deg); }
+}
+
 .validation {
   display: flex;
   align-items: flex-start;
@@ -935,6 +1034,10 @@
   .snapshotGrid,
   .flowList,
   .runtimeMeta {
+    grid-template-columns: 1fr;
+  }
+
+  .setupSteps {
     grid-template-columns: 1fr;
   }
 

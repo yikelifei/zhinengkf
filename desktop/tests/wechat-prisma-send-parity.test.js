@@ -416,7 +416,7 @@ test("official API acceptance plus atomic DB rejection becomes non-retryable unk
   assert.equal(result.retryScheduled, false);
 });
 
-test("stale official started attempt stays delivery-unknown and continues blocking its account queue", async (t) => {
+test("stale official started attempt stays delivery-unknown without blocking a new customer reply", async (t) => {
   t.after(() => { appConfig.useLocalStore = true; });
   appConfig.useLocalStore = false;
   const oldTime = new Date(Date.now() - 10 * 60_000).toISOString();
@@ -505,10 +505,9 @@ test("stale official started attempt stays delivery-unknown and continues blocki
   );
 
   const queueResult = await service.processPrismaSafeSendQueue({});
-  assert.equal(queuedExecutions, 0);
-  assert.equal(queueResult.processed.length, 0);
-  assert.equal(queueResult.skipped[0].sendTaskId, queued.id);
-  assert.equal(queueResult.skipped[0].queueHeadId, stale.id);
+  assert.equal(queuedExecutions, 1);
+  assert.equal(queueResult.processed.length, 1);
+  assert.equal(queueResult.processed[0].task.id, queued.id);
   assert.equal(attempts[stale.id].status, "started");
 });
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { QrCode, RefreshCw } from "lucide-react";
+import { ExternalLink, QrCode, RefreshCw, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   bindAllWechatWorkCustomerEntries,
@@ -10,6 +10,7 @@ import {
   getWechatWorkCustomerEntry,
   getWechatWorkUpgradeServiceConfig,
   importWechatWorkCustomerEntry,
+  saveWechatWorkCustomerContactCredential,
   saveWechatWorkCustomerServiceCredential,
   validateWechatWorkCustomerServiceSecret,
   type OperatorAccessStatus,
@@ -38,8 +39,10 @@ export function WechatWorkCustomerEntryPage() {
   const [importBusy, setImportBusy] = useState(false);
   const [diagnosisBusy, setDiagnosisBusy] = useState(false);
   const [credentialBusy, setCredentialBusy] = useState(false);
+  const [customerContactBusy, setCustomerContactBusy] = useState(false);
   const [entryBindingBusy, setEntryBindingBusy] = useState(false);
   const [customerServiceSecret, setCustomerServiceSecret] = useState("");
+  const [customerContactSecret, setCustomerContactSecret] = useState("");
   const [selectedOpenKfid, setSelectedOpenKfid] = useState("");
   const qrHost = useRef<HTMLDivElement>(null);
 
@@ -131,7 +134,7 @@ export function WechatWorkCustomerEntryPage() {
       setNotice(result.detail);
     } catch (credentialError) {
       setCredentialValidation(null);
-      setError(errorMessage(credentialError, "微信客服 Secret 验证失败"));
+      setError(errorMessage(credentialError, "自建应用 Secret 验证失败"));
     } finally {
       setCredentialBusy(false);
     }
@@ -155,6 +158,25 @@ export function WechatWorkCustomerEntryPage() {
       setCredentialBusy(false);
     }
   }, [customerServiceSecret, refreshConfiguration, selectedOpenKfid]);
+
+  const saveCustomerContactCredential = useCallback(async () => {
+    const secret = customerContactSecret.trim();
+    if (!secret || customerContactBusy) return;
+    setCustomerContactBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await saveWechatWorkCustomerContactCredential(secret);
+      setCustomerContactSecret("");
+      setNoticeTone("success");
+      setNotice(result.detail);
+      await refreshConfiguration();
+    } catch (saveError) {
+      setError(errorMessage(saveError, "客户联系应用凭证验证失败"));
+    } finally {
+      setCustomerContactBusy(false);
+    }
+  }, [customerContactBusy, customerContactSecret, refreshConfiguration]);
 
   useEffect(() => {
     void refreshConfiguration();
@@ -216,7 +238,7 @@ export function WechatWorkCustomerEntryPage() {
       title="客户入口"
       description="生成企业微信官方客服链接和二维码，让其他微信客户进入咨询；成交客户可继续升级为长期企业微信客户。"
       icon={<QrCode size={20} />}
-      busy={busy || importBusy || diagnosisBusy || credentialBusy || entryBindingBusy || configBusy}
+      busy={busy || importBusy || diagnosisBusy || credentialBusy || customerContactBusy || entryBindingBusy || configBusy}
       actions={(
         <>
           <button type="button" data-action-id="wechat-work.customer-entry.bind-all" aria-label="绑定全部企业微信客服账号二维码" onClick={() => void bindAllCustomerEntries()} disabled={!canGenerate || entryBindingBusy || configBusy}>
@@ -248,6 +270,74 @@ export function WechatWorkCustomerEntryPage() {
         <FeatureNotice tone="warning" title="当前账号不能生成入口">
           请使用具有“管理通道”权限的管理员或主管账号打开本页。
         </FeatureNotice>
+      ) : null}
+
+      {upgrade?.customerContact ? (
+        <section className={styles.panel} aria-labelledby="wechat-work-customer-contact-title">
+          <div className={styles.panelHeader}>
+            <div>
+              <h2 id="wechat-work-customer-contact-title">长期客户连接</h2>
+              <p>{upgrade.customerContact.detail}</p>
+            </div>
+            <span className={`${styles.statusBadge} ${upgrade.customerContact.ready ? styles.statusReady : styles.statusDanger}`}>
+              {upgrade.customerContact.ready ? "已授权" : "待授权"}
+            </span>
+          </div>
+          <dl className={styles.runtimeMeta}>
+            <div>
+              <dt>应用凭证</dt>
+              <dd>{upgrade.customerContact.credentialSource === "wechat_work_shared" ? "复用现有企业微信应用" : upgrade.customerContact.configured ? "已配置独立应用" : "未配置"}</dd>
+            </div>
+            <div>
+              <dt>已识别应用</dt>
+              <dd>{upgrade.customerContact.applications?.map((application) => application.name).join("、") || "等待企业微信返回"}</dd>
+            </div>
+            <div>
+              <dt>客户联系 API</dt>
+              <dd>{upgrade.customerContact.ready ? "可调用" : upgrade.customerContact.blockerCode || "未通过"}</dd>
+            </div>
+            <div>
+              <dt>添加客户回调</dt>
+              <dd>{upgrade.customerContact.callback?.locallyReady ? "本机配置已就绪" : "未就绪"}</dd>
+            </div>
+          </dl>
+          {upgrade.customerContact.blockerCode === "CUSTOMER_CONTACT_PERMISSION_MISSING" ? (
+            <>
+              <FeatureNotice tone="warning" title="企业微信管理员需要完成一次授权">
+                打开企业微信管理后台，进入“客户联系 → 客户 → API → 可调用接口的应用”，添加上方已识别的自建应用。保存后回到本页点击“刷新配置”，不需要重新填写 Secret。
+              </FeatureNotice>
+              <div className={styles.buttonRow}>
+                <a className={styles.actionLink} href="https://work.weixin.qq.com/wework_admin/frame" target="_blank" rel="noreferrer">
+                  <ExternalLink size={15} aria-hidden="true" /> 打开企业微信管理后台
+                </a>
+                <button type="button" data-action-id="wechat-work.customer-entry.refresh-after-auth" aria-label="授权后重新检测企业微信配置" onClick={() => void refreshConfiguration()} disabled={configBusy || customerContactBusy}>
+                  <RefreshCw size={15} aria-hidden="true" /> 授权后重新检测
+                </button>
+              </div>
+            </>
+          ) : null}
+          {!upgrade.customerContact.ready && upgrade.customerContact.credentialSource !== "wechat_work_shared" ? (
+            <>
+              <label className={`${styles.field} ${styles.fieldWide}`}>
+                <span>已授权自建应用 Secret</span>
+                <input
+                  type="password"
+                  value={customerContactSecret}
+                  autoComplete="new-password"
+                  spellCheck={false}
+                  placeholder="粘贴已加入客户联系可调用应用的 Secret"
+                  onChange={(event) => setCustomerContactSecret(event.currentTarget.value)}
+                />
+                <small>Secret 只提交给本机服务验证，不在浏览器回显。</small>
+              </label>
+              <div className={styles.buttonRow}>
+                <button className={styles.primaryButton} type="button" data-action-id="wechat-work.customer-entry.save-customer-contact-secret" aria-label="验证并保存企业微信客户联系 Secret" onClick={() => void saveCustomerContactCredential()} disabled={!customerContactSecret.trim() || customerContactBusy}>
+                  <ShieldCheck size={15} aria-hidden="true" /> {customerContactBusy ? "正在验证" : "验证并保存"}
+                </button>
+              </div>
+            </>
+          ) : null}
+        </section>
       ) : null}
 
       {diagnosis ? (
@@ -295,24 +385,24 @@ export function WechatWorkCustomerEntryPage() {
         <section className={styles.panel} aria-labelledby="wechat-work-secret-connect-title">
           <div className={styles.panelHeader}>
             <div>
-              <h2 id="wechat-work-secret-connect-title">连接企业微信联合版微信客服</h2>
-              <p>从企业微信管理后台“微信客服 → API”复制 Secret，在这里验证；Secret 不回显，也不会保存在浏览器。</p>
+              <h2 id="wechat-work-secret-connect-title">连接企业微信客服</h2>
+              <p>先在“应用管理 → 应用 → 自建”创建或打开自建应用，再把该应用加入“应用管理 → 微信客服 → API → 可调用接口的应用”；这里填写的是自建应用详情页的 Secret。</p>
             </div>
           </div>
           <label className={`${styles.field} ${styles.fieldWide}`}>
-            <span>微信客服 Secret</span>
+            <span>已授权自建应用 Secret</span>
             <input
               type="password"
               value={customerServiceSecret}
               autoComplete="new-password"
               spellCheck={false}
-              placeholder="粘贴微信客服 API 页面显示的 Secret"
+              placeholder="粘贴自建应用详情页里的 Secret"
               onChange={(event) => {
                 setCustomerServiceSecret(event.currentTarget.value);
                 setCredentialValidation(null);
               }}
             />
-            <small>不要填写自建应用 Secret；软件会先调用企业微信官方账号列表验证，验证失败不会保存。</small>
+            <small>请使用已加入微信客服“可调用接口的应用”的自建应用 Secret；软件会先调用官方账号列表验证，失败不会保存。</small>
           </label>
           {credentialValidation ? (
             <label className={`${styles.field} ${styles.fieldWide}`}>
@@ -327,12 +417,12 @@ export function WechatWorkCustomerEntryPage() {
             </label>
           ) : null}
           <div className={styles.buttonRow}>
-            <button type="button" data-action-id="wechat-work.customer-entry.validate-secret" aria-label="验证企业微信客服 Secret" onClick={() => void validateCredential()} disabled={!customerServiceSecret.trim() || credentialBusy}>
+            <button type="button" data-action-id="wechat-work.customer-entry.validate-secret" aria-label="验证自建应用 Secret" onClick={() => void validateCredential()} disabled={!customerServiceSecret.trim() || credentialBusy}>
               {credentialBusy ? "正在验证" : "验证 Secret"}
             </button>
             {credentialValidation ? (
               <button className={styles.primaryButton} type="button" data-action-id="wechat-work.customer-entry.save-secret"
-                aria-label="保存企业微信客服 Secret 并一键开通"
+                aria-label="保存自建应用 Secret 并一键开通"
                 onClick={() => void saveCredential()}
                 disabled={!selectedOpenKfid || credentialBusy}
               >

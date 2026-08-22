@@ -166,7 +166,7 @@ export function SendBlockedPage({ filters = {}, initialTaskId = "" }: SendBlocke
     <SendPageFrame
       id="send-blocked-page"
       title="拦截与失败任务"
-      description="只处理服务端已阻断或失败的任务；人工接管、路由阻断和未知投递不允许绕过。"
+      description="只处理服务端已阻断或失败的任务；历史人工锁、路由阻断和未知投递不允许绕过。"
       icon={<ShieldAlert size={20} />}
       busy={busy || operationBusy}
       actions={(
@@ -222,7 +222,7 @@ export function SendBlockedPage({ filters = {}, initialTaskId = "" }: SendBlocke
       ) : null}
       <section className={styles.panel} aria-labelledby="blocked-send-task-list-title">
         <header className={styles.panelHeader}>
-          <div><h2 id="blocked-send-task-list-title">{initialTaskId ? "当前拦截任务" : "需要人工判断的任务"}</h2><p>{initialTaskId ? "只判断这一项任务应重新排队还是取消。" : "列表只负责选择；不会解除人工接管或修改路由策略。"}</p></div>
+          <div><h2 id="blocked-send-task-list-title">{initialTaskId ? "当前拦截任务" : "需要人工判断的任务"}</h2><p>{initialTaskId ? "只判断这一项任务应重新排队还是取消。" : "列表只负责选择；不会修改历史人工锁或路由策略。"}</p></div>
         </header>
         {busy && !tasks.length ? <SendLoading label="正在读取拦截任务" /> : null}
         {!busy && !blockedTasks.length ? <SendEmpty title="没有需要处理的拦截任务" detail="当前没有服务端阻断、失败或投递不确定任务。" /> : null}

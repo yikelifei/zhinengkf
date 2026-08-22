@@ -55,6 +55,12 @@ async function listFiles(root) {
   return files.sort();
 }
 
+async function streamToBuffer(stream) {
+  const chunks = [];
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}
+
 test("asset base64 ingestion is strict and rejected payloads never reach disk", async (t) => {
   const service = new StorageService();
   const tempRoot = await storageFixture(t);
@@ -75,6 +81,38 @@ test("asset base64 ingestion is strict and rejected payloads never reach disk", 
     );
   }
   assert.deepEqual(await listFiles(tempRoot), []);
+});
+
+test("local image thumbnails are bounded WebP derivatives of stored assets", async (t) => {
+  const service = new StorageService();
+  const tempRoot = await storageFixture(t);
+  const saved = await service.saveAssetFromBase64({
+    ownerType: "sku",
+    ownerId: "BOX-A",
+    fileName: "main.png",
+    mimeType: "image/png",
+    base64: VALID_PNG.toString("base64"),
+  });
+
+  const thumbnail = await service.readLocalImageThumbnail(saved.localPath, { width: 128, height: 96 });
+  const bytes = await streamToBuffer(thumbnail.stream);
+
+  assert.equal(thumbnail.mimeType, "image/webp");
+  assert.equal(thumbnail.inlineSafe, true);
+  assert.match(thumbnail.fileName, /main-thumb\.webp$/);
+  assert.equal(bytes.length, thumbnail.sizeBytes);
+  assert.equal(bytes.subarray(0, 4).toString("ascii"), "RIFF");
+  assert.equal(bytes.subarray(8, 12).toString("ascii"), "WEBP");
+
+  const cacheFiles = (await listFiles(tempRoot)).filter((file) => file.includes(`${path.sep}.cache${path.sep}thumbnails${path.sep}`));
+  assert.equal(cacheFiles.length, 1);
+
+  const cachedThumbnail = await service.readLocalImageThumbnail(saved.localPath, { width: 128, height: 96 });
+  const cachedBytes = await streamToBuffer(cachedThumbnail.stream);
+  assert.equal(cachedThumbnail.mimeType, "image/webp");
+  assert.equal(cachedThumbnail.sizeBytes, thumbnail.sizeBytes);
+  assert.deepEqual(cachedBytes, bytes);
+  assert.equal((await listFiles(tempRoot)).filter((file) => file.includes(`${path.sep}.cache${path.sep}thumbnails${path.sep}`)).length, 1);
 });
 
 test("base64 and UTF-8 text assets share the exact byte boundary before writing", async (t) => {

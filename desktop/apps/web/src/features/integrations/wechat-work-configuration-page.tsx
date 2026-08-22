@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw, Settings2 } from "lucide-react";
 import {
@@ -13,6 +14,7 @@ import styles from "./integration-pages.module.css";
 import { useAsyncResource } from "./use-async-resource";
 import { checkLabel, readinessStatusLabel } from "./wechat-work-configuration-labels";
 import { WechatWorkAuthorizationPanel } from "./wechat-work-authorization-panel";
+import { WechatWorkFirstSetupWizard } from "./wechat-work-first-setup-wizard";
 
 async function loadWechatWorkConfiguration() {
   const [readiness, authorization] = await Promise.all([
@@ -43,6 +45,9 @@ export function WechatWorkConfigurationPage() {
   ].every((key) => readiness.local.checks.some((check) => check.key === key && check.status === "ready")));
   const providerAuthorizationOptional = authorization?.credentialMode === "static_secret"
     && authorization.activeAuthorizationCount === 0;
+  const productionPersistenceReady = Boolean(
+    readiness?.local.checks.some((check) => check.key === "persistence" && check.status === "ready"),
+  );
   const pendingFlow = authorization?.latestFlow?.status === "pending"
     || authorization?.latestFlow?.status === "exchanging";
 
@@ -92,6 +97,12 @@ export function WechatWorkConfigurationPage() {
     >
       {error ? <FeatureNotice tone="error" title="企业微信配置读取失败">{error}</FeatureNotice> : null}
       {actionError ? <FeatureNotice tone="error" title="扫码授权未启动">{actionError}</FeatureNotice> : null}
+      {readiness && !productionPersistenceReady ? (
+        <FeatureNotice tone="warning" title="生产持久化尚未接通">
+          <span>当前桌面端使用本地 JSON 保存会话；正式服务器仍需 PostgreSQL、Prisma 迁移和持久化运行证据。</span>
+          <Link href="/settings/delivery-readiness">打开生产交付检查</Link>
+        </FeatureNotice>
+      ) : null}
       <FeatureNotice tone="info" title="配置由本机安全环境维护">
         密钥只从本机安全环境读取，页面不显示任何密钥明文，也不在浏览器保存；启用服务商模式后，suite_ticket 与永久授权码只会加密落盘。
       </FeatureNotice>
@@ -99,6 +110,10 @@ export function WechatWorkConfigurationPage() {
       {!busy && !data ? <EmptyState title="暂无配置检查结果" detail="恢复本机 API 后重新读取。" /> : null}
       {readiness && authorization ? (
         <>
+          <WechatWorkFirstSetupWizard
+            configurationReady={staticCredentialReady}
+            onComplete={async () => { await refresh(); }}
+          />
           {staticCredentialReady && authorization.credentialMode === "static_secret" ? (
             <FeatureNotice tone="warning" title="单企业直连参数已填写，尚未证明互通">
               CorpID、Secret 与 OpenKfid 已有值，但只有官方接口检测、真实客户来信和成功回复才能证明互通；下方服务商扫码授权仅用于多企业安装。

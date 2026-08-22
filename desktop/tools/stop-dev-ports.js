@@ -46,6 +46,7 @@ const managedPorts = [
   numberEnv("WEB_PORT", 3100),
   numberEnv("API_PORT", 3200),
   numberEnv("MOCK_DESIGN_PLATFORM_PORT", 3700),
+  numberEnv("ZHENXI_BROWSER_EMBED_PORT", 3710),
 ];
 
 main();

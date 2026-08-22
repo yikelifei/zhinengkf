@@ -5,6 +5,7 @@ import styles from "./conversation-workflow-rail.module.css";
 
 type ConversationWorkflowRailProps = {
   actions: ConversationWorkbenchWorkflowAction[];
+  compact?: boolean;
 };
 
 const icons = {
@@ -17,10 +18,10 @@ const icons = {
   training: GraduationCap,
 };
 
-export function ConversationWorkflowRail({ actions }: ConversationWorkflowRailProps) {
+export function ConversationWorkflowRail({ actions, compact = false }: ConversationWorkflowRailProps) {
   if (!actions.length) return null;
   return (
-    <nav className={styles.workflowRail} aria-label="会话业务流程">
+    <nav className={styles.workflowRail} data-compact={compact ? "true" : "false"} aria-label="会话业务流程">
       {actions.map((action) => {
         const Icon = icons[action.icon];
         return (

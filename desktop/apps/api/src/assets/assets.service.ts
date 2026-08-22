@@ -99,6 +99,16 @@ export class AssetsService {
     return this.storage.readLocalAsset(canonicalLocalPath);
   }
 
+  async readLocalAssetThumbnail(
+    localPath: string,
+    expected: ExpectedIdentityPayload = {},
+    options: { width?: number; height?: number } = {},
+  ) {
+    const canonicalLocalPath = await this.resolveCanonicalLocalAssetPath(localPath);
+    await this.assertLocalAssetReadIdentity(canonicalLocalPath, expected);
+    return this.storage.readLocalImageThumbnail(canonicalLocalPath, options);
+  }
+
   async readLocalAssetById(assetId: string, expected: ExpectedIdentityPayload = {}) {
     const id = String(assetId || "").trim();
     if (!id) throw new BadRequestException("asset id is required");

@@ -314,59 +314,6 @@
   font-style: normal;
 }
 
-.attachmentList {
-  display: grid;
-  gap: 5px;
-}
-
-.attachmentList > :is(span, a) {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  min-width: 0;
-  align-items: center;
-  gap: 6px;
-  border-radius: 4px;
-  padding: 6px;
-  color: inherit;
-  background: rgb(31 35 41 / 5%);
-  text-decoration: none;
-}
-
-.attachmentList > a:hover {
-  background: rgb(31 35 41 / 9%);
-}
-
-.attachmentList > :is(span, a) > span {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-}
-
-.attachmentList > .imageAttachment {
-  grid-template-columns: minmax(0, 1fr);
-  padding: 5px;
-}
-
-.imageAttachment img {
-  display: block;
-  width: min(240px, 100%);
-  max-height: 220px;
-  border-radius: 4px;
-  object-fit: contain;
-  background: #fff;
-}
-
-.attachmentList :is(b, small) {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.attachmentList small {
-  color: var(--cw-muted);
-  font-size: 9px;
-}
-
 .jumpToLatest {
   position: sticky;
   z-index: 3;
@@ -860,14 +807,36 @@
 }
 
 .threadPane[data-variant="wecom"] .messageBubble {
+  position: relative;
   border-color: #e3e5e8;
   border-radius: 5px;
   box-shadow: 0 1px 1px rgb(31 35 41 / 3%);
 }
 
+.threadPane[data-variant="wecom"] .messageBubble::before {
+  position: absolute;
+  top: 11px;
+  left: -5px;
+  width: 8px;
+  height: 8px;
+  border-bottom: 1px solid #e3e5e8;
+  border-left: 1px solid #e3e5e8;
+  background: #fff;
+  content: "";
+  transform: rotate(45deg);
+}
+
 .threadPane[data-variant="wecom"] .outboundMessage .messageBubble {
   border-color: #bce6b8;
   background: #c9f2c3;
+}
+
+.threadPane[data-variant="wecom"] .outboundMessage .messageBubble::before {
+  right: -5px;
+  left: auto;
+  border-color: #bce6b8;
+  background: #c9f2c3;
+  transform: rotate(225deg);
 }
 
 .threadPane[data-variant="wecom"] .assistantComposer {

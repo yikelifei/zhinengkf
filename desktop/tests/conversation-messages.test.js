@@ -122,6 +122,169 @@ test("external inbound replay is idempotent within the conversation", () => {
   );
 });
 
+test("timeline keeps pure WeCom text out of attachments and preserves structured message types", async () => {
+  const { localStore, service } = setup();
+  localStore.createMessage({
+    ...primaryIdentity,
+    text: "参考这个卡片",
+    externalId: "wecom-text-with-legacy-payload",
+    attachments: [{
+      source: "wechat_work_kf",
+      msgid: "wecom-text-with-legacy-payload",
+      msgtype: "text",
+      payload: { content: "参考这个卡片" },
+      raw: { msgtype: "text", text: { content: "参考这个卡片" } },
+    }],
+  });
+  localStore.createMessage({
+    ...primaryIdentity,
+    text: "[链接] 企业礼赠方案 https://example.com/gift",
+    externalId: "wecom-link-with-legacy-payload",
+    attachments: [{
+      source: "wechat_work_kf",
+      msgid: "wecom-link-with-legacy-payload",
+      msgtype: "link",
+      payload: { title: "企业礼赠方案", desc: "查看商品搭配", url: "https://example.com/gift" },
+    }],
+  });
+  localStore.createMessage({
+    ...primaryIdentity,
+    text: "[语音]",
+    externalId: "wecom-voice-media",
+    attachments: [{
+      source: "wechat_work_kf",
+      msgid: "wecom-voice-media",
+      msgtype: "voice",
+      type: "audio/wav",
+      localPath: "E:\\storage\\voice.wav",
+      status: "ready",
+    }],
+  });
+
+  const timeline = await service.listConversationTimeline(primaryIdentity);
+  const textMessage = timeline.find((item) => item.externalId === "wecom-text-with-legacy-payload");
+  assert.equal(textMessage.messageType, "text");
+  assert.equal(textMessage.text, "参考这个卡片");
+  assert.deepEqual(textMessage.content, { content: "参考这个卡片" });
+  assert.deepEqual(textMessage.attachments, []);
+
+  const linkMessage = timeline.find((item) => item.externalId === "wecom-link-with-legacy-payload");
+  assert.equal(linkMessage.messageType, "link");
+  assert.equal(linkMessage.text, "");
+  assert.deepEqual(linkMessage.attachments, []);
+  assert.deepEqual(linkMessage.content, {
+    title: "企业礼赠方案",
+    description: "查看商品搭配",
+    url: "https://example.com/gift",
+  });
+
+  const voiceMessage = timeline.find((item) => item.externalId === "wecom-voice-media");
+  assert.equal(voiceMessage.text, "");
+  assert.equal(voiceMessage.attachments[0].kind, "voice");
+  assert.equal(voiceMessage.attachments[0].name, "voice.wav");
+});
+
+test("official inbound media is read through the conversation-bound attachment route", async () => {
+  const { tempDir, localStore, service } = setup();
+  const storageRoot = path.join(tempDir, "storage");
+  const inboundDirectory = path.join(storageRoot, "wechat-work", "inbound", "message-1");
+  fs.mkdirSync(inboundDirectory, { recursive: true });
+  const mediaPath = path.join(inboundDirectory, "voice.wav");
+  const bytes = Buffer.from("RIFF0000WAVEfmt ", "ascii");
+  fs.writeFileSync(mediaPath, bytes);
+  appConfig.localStorageRoot = storageRoot;
+  localStore.createMessage({
+    ...primaryIdentity,
+    text: "[语音]",
+    externalId: "official-media-message-1",
+    attachments: [{
+      source: "wechat_work_kf",
+      msgid: "official-media-message-1",
+      msgtype: "voice",
+      type: "audio/wav",
+      localPath: mediaPath,
+      size: bytes.length,
+      status: "ready",
+    }],
+  });
+  const timeline = await service.listConversationTimeline(primaryIdentity);
+  const message = timeline.find((item) => item.externalId === "official-media-message-1");
+  const file = await service.readConversationTimelineAttachment(primaryIdentity, message.id, message.attachments[0].id);
+  assert.equal(file.mimeType, "audio/wav");
+  assert.equal(file.sizeBytes, bytes.length);
+  assert.equal(file.fileName, "voice.wav");
+  file.stream.destroy();
+  await assert.rejects(
+    () => service.readConversationTimelineAttachment({ ...primaryIdentity, customerId: "customer_demo_2" }, message.id, message.attachments[0].id),
+    /customer binding invalid/,
+  );
+});
+
+test("one rich outbound task is displayed as the same ordered WeCom message sequence", async () => {
+  const { localStore, service } = setup();
+  const task = localStore.createSendTask({
+    operationKey: "rich-outbound-timeline-1",
+    ...primaryIdentity,
+    payload: {
+      kind: "wechat_work_messages",
+      messages: [
+        { msgtype: "text", message: { content: "先看商品方案" } },
+        { msgtype: "link", message: { title: "企业礼赠方案", desc: "打开查看", url: "https://example.com/gift" } },
+        { msgtype: "miniprogram", message: { title: "礼赠商城", appid: "wx-demo", pagepath: "/products", thumb_media_id: "media-1" } },
+        { msgtype: "file", message: { media_id: "media-file-1" }, fileName: "报价单.pdf" },
+      ],
+    },
+    guardSnapshot: { policy: "safe-send-queue" },
+  });
+  const timeline = await service.listConversationTimeline(primaryIdentity);
+  const parts = timeline.filter((item) => item.sendTaskId === task.id);
+  assert.deepEqual(parts.map((item) => item.messageType), ["text", "link", "miniprogram", "file"]);
+  assert.equal(parts[0].text, "先看商品方案");
+  assert.equal(parts[1].content.title, "企业礼赠方案");
+  assert.equal(parts[2].content.title, "礼赠商城");
+  assert.equal(parts[3].attachments[0].kind, "file");
+  assert.equal(parts[3].attachments[0].name, "报价单.pdf");
+});
+
+test("timeline shows an accepted QR as sent when a later optional text message hits the session limit", async () => {
+  const { tempDir, localStore, service } = setup();
+  const task = localStore.createSendTask({
+    operationKey: "partial-qr-timeline-1",
+    ...primaryIdentity,
+    payload: {
+      kind: "wechat_work_messages",
+      source: "manual_reply",
+      messages: [
+        { msgtype: "image", mediaPath: path.join(tempDir, "specialist.png") },
+        { msgtype: "text", message: { content: "请长按识别二维码" } },
+      ],
+    },
+    guardSnapshot: { policy: "safe-send-queue" },
+  });
+  localStore.updateSendTask(task.id, {
+    status: "sending",
+    errorMessage: "wechat work send_msg failed: send msg count limit, errcode 95001",
+  });
+  localStore.createSendAttempt({
+    sendTaskId: task.id,
+    adapter: "wechat_work_kf",
+    status: "started",
+    errorMessage: "wechat work send_msg failed: send msg count limit, errcode 95001",
+    metadata: {
+      deliveryState: "partial",
+      acceptedMessageIds: ["accepted-qr-msgid"],
+      failureStage: "send_text",
+    },
+  });
+
+  const timeline = await service.listConversationTimeline(primaryIdentity);
+  const parts = timeline.filter((item) => item.sendTaskId === task.id);
+  assert.deepEqual(parts.map((item) => item.status), ["sent", "failed"]);
+  assert.equal(parts[0].attachments[0].status, "sent");
+  assert.equal(parts[0].errorMessage, "");
+  assert.match(parts[1].errorMessage, /95001/);
+});
+
 test("production-ready customer poster creates a grounded four-image Zhenxi job without gift-box fields", async () => {
   const { localStore, service } = setup();
   const result = await service.processInboundMessage({
@@ -135,6 +298,12 @@ test("production-ready customer poster creates a grounded four-image Zhenxi job 
   assert.deepEqual(result.designJob.budget, {});
   assert.equal(result.designJob.requirements.zhenxi.size, "1080x1440");
   assert.equal(result.designJob.requirements.zhenxi.ratio, "3:4");
+  assert.equal(result.designJob.requirements.zhenxi.canvasSize, "1080x1440");
+  assert.equal(result.designJob.requirements.zhenxi.orientation, "vertical");
+  assert.equal(result.designJob.requirements.zhenxi.category, "poster");
+  assert.equal(result.designJob.requirements.zhenxi.templateGroupKey, "poster");
+  assert.equal(result.designJob.requirements.zhenxi.cardType, "海报自定义模板");
+  assert.equal(result.designJob.requirements.zhenxi.copyCount, 4);
   assert.equal(result.designJob.requirements.zhenxi.copyText, "七夕有礼");
   assert.equal(result.designJob.requirements.zhenxi.visualContentMode, "graphic_only");
   assert.equal(result.designJob.requirements.zhenxi.exactCopyOnly, true);
@@ -156,30 +325,39 @@ test("explicit video script request creates a durable Zhenxi copy job", async ()
   assert.equal(result.designJob.requirements.zhenxi.module, "video_script");
 });
 
-test("customer creative conversation resumes on the next turn and creates only requested jobs", async () => {
+test("customer greeting card request starts immediately with generated copy and configured material defaults", async () => {
   const { localStore, service } = setup();
-  const pending = await service.processInboundMessage({
+  const result = await service.processInboundMessage({
     ...primaryIdentity,
     externalId: "creative-card-pending-1",
     text: "帮我做一张教师节贺卡",
   });
-  assert.equal(pending.plan.reason, "creative_materials_required");
-  assert.equal(pending.designJob, null);
-  assert.deepEqual(pending.route.replyDraft.customerToolPlan.requestedDeliverables, ["greeting_card"]);
+  assert.equal(result.plan.reason, "customer_creative_ready");
+  assert.equal(result.designJobs.length, 1);
+  assert.equal(result.designJob.designType, "zhenxi_image");
+  assert.equal(result.designJob.requirements.customerAgent.deliverable, "greeting_card");
+  assert.equal(result.designJob.requirements.zhenxi.copyText, "");
+  assert.equal(result.designJob.requirements.zhenxi.logoMode, "none");
+  assert.equal(result.designJob.requirements.zhenxi.copyCount, 4);
+  assert.equal(result.designJob.requirements.zhenxi.canvasSize, "1063x1535");
+  assert.equal(result.designJob.requirements.zhenxi.cardType, "贺卡自定义模板");
+  assert.equal(localStore.listDesignJobs().filter((job) => job.requirements?.customerAgent?.planId === result.route.replyDraft.customerToolPlan.planId).length, 1);
+});
 
-  const ready = await service.processInboundMessage({
+test("square greeting-card evidence is persisted as a 1:1 Zhenxi material job", async () => {
+  const { service } = setup();
+  const result = await service.processInboundMessage({
     ...primaryIdentity,
-    externalId: "creative-card-ready-1",
-    text: "文案写“老师，节日快乐”，不放logo，尺寸90x54mm",
+    externalId: "creative-square-card-1",
+    text: "帮我做一张贺卡，图片里的贺卡款式是正方形的",
   });
-  assert.equal(ready.plan.reason, "customer_creative_ready");
-  assert.equal(ready.designJobs.length, 1);
-  assert.equal(ready.designJob.designType, "zhenxi_image");
-  assert.equal(ready.designJob.requirements.customerAgent.deliverable, "greeting_card");
-  assert.equal(ready.designJob.requirements.zhenxi.copyText, "老师，节日快乐");
-  assert.equal(ready.designJob.requirements.zhenxi.logoMode, "none");
-  assert.equal(ready.designJob.requirements.zhenxi.physicalSize, "90×54mm");
-  assert.equal(localStore.listDesignJobs().filter((job) => job.requirements?.customerAgent?.planId === pending.route.replyDraft.customerToolPlan.planId).length, 1);
+
+  assert.equal(result.plan.reason, "customer_creative_ready");
+  assert.equal(result.designJob.requirements.customerAgent.deliverable, "greeting_card");
+  assert.equal(result.designJob.requirements.zhenxi.orientation, "square");
+  assert.equal(result.designJob.requirements.zhenxi.ratio, "1:1");
+  assert.equal(result.designJob.requirements.zhenxi.canvasSize, "1:1");
+  assert.equal(result.designJob.requirements.zhenxi.cardType, "贺卡自定义模板");
 });
 
 test("one customer turn can fan out into separate card and tag design jobs", async () => {
@@ -615,10 +793,15 @@ test("completed inbound replay fails closed for every existing foreign durable r
   }
 });
 
-test("manual reply uses safe queue while automation stays blocked by manual takeover", async () => {
+test("manual reply uses safe queue while automation stays enabled without takeover", async () => {
   const { localStore, service, tempDir } = setup();
   localStore.updateConversation(primaryIdentity.conversationId, { manualLocked: true });
-  await assert.rejects(() => service.enqueueTextMessage({ ...primaryIdentity, text: "自动消息" }), /会话已人工接管/);
+  const automatic = await service.enqueueTextMessage({
+    ...primaryIdentity,
+    text: "自动消息",
+    operationKey: "conversation-automatic-without-takeover-1",
+  });
+  assert.equal(automatic.status, "queued");
   await assert.rejects(
     () => service.enqueueManualReply({
       ...primaryIdentity,
@@ -679,6 +862,7 @@ test("manual reply uses safe queue while automation stays blocked by manual take
 
 test("manual reply attachments stay customer-bound and appear in the queued timeline", async () => {
   const { localStore, service, tempDir } = setup();
+  localStore.updateConversation(primaryIdentity.conversationId, { manualLocked: true });
   const storageRoot = path.join(tempDir, "storage");
   appConfig.localStorageRoot = storageRoot;
   const customerDir = path.join(storageRoot, "assets", "customer", primaryIdentity.customerId);
@@ -722,6 +906,8 @@ test("manual reply attachments stay customer-bound and appear in the queued time
   });
   assert.equal(queued.task.payload.source, "manual_reply");
   assert.equal(queued.task.payload.manualReply, true);
+  assert.equal(queued.task.guardSnapshot.binding.ok, true);
+  assert.equal(queued.task.guardSnapshot.manualReply, true);
   assert.equal(queued.task.payload.imagePaths.length, 1);
   assert.equal(queued.task.payload.filePaths.length, 1);
   assert.deepEqual(queued.task.payload.assetIds, [image.id, file.id]);

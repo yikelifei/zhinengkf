@@ -55,7 +55,11 @@ export function useCatalogProducts(skuCode = "") {
       : [next, ...rows]);
   }
 
-  return { records, selected, loading, loaded, stale, error, refresh, replace };
+  function remove(skuCodeToRemove: string) {
+    setRecords((rows) => rows.filter((row) => row.skuCode !== skuCodeToRemove));
+  }
+
+  return { records, selected, loading, loaded, stale, error, refresh, replace, remove };
 }
 
 export function useCatalogRepairQueue(skuCode = "") {

@@ -17,7 +17,11 @@ const { appConfig } = require("../apps/api/src/shared/app-config");
 const { deterministicOperationId } = require("../apps/api/src/shared/operation-idempotency");
 const { WechatDispatchService } = require("../apps/api/src/wechat/wechat-dispatch.service");
 const { WechatSendAdapterService } = require("../apps/api/src/wechat/wechat-send-adapter.service");
-const { WechatWorkApiClient, WechatWorkApiError } = require("../apps/api/src/wechat-work/wechat-work-api.client");
+const {
+  WECHAT_WORK_API_RELAY_TOKEN_HEADER,
+  WechatWorkApiClient,
+  WechatWorkApiError,
+} = require("../apps/api/src/wechat-work/wechat-work-api.client");
 const {
   WechatWorkService,
   callbackSyncRetryDelayMs,
@@ -66,6 +70,8 @@ function setup(options = {}) {
   appConfig.wechatWorkEncodingAesKey = crypto.randomBytes(32).toString("base64").replace(/=$/, "");
   appConfig.wechatWorkOpenKfid = "wk-default";
   appConfig.wechatWorkApiBaseUrl = "https://qyapi.weixin.qq.com";
+  appConfig.wechatWorkApiRelayToken = "";
+  appConfig.wechatWorkCallbackProcessingMode = "process";
   appConfig.wechatSendAdapter = "wechat_work_kf";
   appConfig.customerServicePublicBaseUrl = "https://kefu.example.com";
   appConfig.wechatWorkSendMaxAttempts = 3;
@@ -211,8 +217,9 @@ function setup(options = {}) {
       this.accountListCalls += 1;
       return this.accountListResponse;
     },
-    async listCustomerServiceAccountsWithSecret(secret) {
+    async listCustomerServiceAccountsWithSecret(secret, corpId) {
       this.validatedSecret = secret;
+      this.validatedCorpId = corpId;
       return this.accountListResponse;
     },
     async listApplications() {
@@ -383,7 +390,7 @@ function setup(options = {}) {
     api,
     undefined,
     undefined,
-    undefined,
+    options.callbackEvents,
     options.inboundUnderstanding,
     options.assets,
   );
@@ -929,7 +936,7 @@ test("the next inbound message safely resumes only a failed specialist QR", asyn
   assert.equal(api.externalContactWayCalls.length, 1);
 });
 
-test("a deferred specialist QR recovery stays queued and suppresses duplicate inbound routing", async () => {
+test("specialist QR recovery sends immediately even when an older task is still queued", async () => {
   const { api, localStore, service } = setup();
   appConfig.wechatWorkExternalContactSecret = "external-contact-secret-test";
   api.imageSendFailures.push(new WechatWorkApiError("send_msg", "send msg count limit", { errcode: 95001 }));
@@ -967,18 +974,26 @@ test("a deferred specialist QR recovery stays queued and suppresses duplicate in
   }, binding.openKfid);
 
   assert.equal(processed.status, "processed");
-  assert.equal(processed.result.plan.type, "service_action_queued");
-  assert.equal(processed.result.plan.reason, "customer_upgrade_qr_queued");
-  assert.equal(processed.result.sendTask, null);
-  assert.equal(api.sendCalls.length, sendCountBeforeInbound);
+  assert.equal(processed.result.plan.type, "service_action_completed");
+  assert.equal(processed.result.plan.reason, "customer_upgrade_qr_recovered");
+  assert.equal(processed.result.plan.noInterceptFallback, true);
+  assert.equal(processed.result.plan.acknowledgementOnly, true);
+  assert.equal(processed.result.sendTask.wechatAccountId, binding.wechatAccountId);
+  assert.equal(processed.result.sendTask.conversationId, binding.conversationId);
+  assert.equal(processed.result.sendTask.customerId, binding.customerId);
+  assert.equal(processed.immediateReply.ok, true);
+  assert.equal(processed.immediateReply.task.status, "sent");
+  assert.equal(api.sendCalls.length, sendCountBeforeInbound + 1);
+  assert.equal(api.sendCalls.at(-1).externalUserId, binding.externalUserId);
+  assert.match(api.sendCalls.at(-1).text, /收到您的消息/);
   assert.equal(localStore.getSendTask(blocker.task.id).status, "queued");
   const upgrade = await service.getCustomerUpgradeStatus({
     ...identity,
     memberUserId: "member-owner",
     wording: "添加企业微信后，我继续为您服务。",
   });
-  assert.equal(upgrade.status, "queued");
-  assert.equal(upgrade.imageStatus, "queued");
+  assert.equal(upgrade.status, "api_accepted");
+  assert.equal(upgrade.imageStatus, "api_accepted");
   const duplicateRecovery = await service.resumePendingCustomerUpgradeQrAfterInbound({
     binding,
     msgid: "another-message-must-not-create-another-qr-task",
@@ -989,7 +1004,7 @@ test("a deferred specialist QR recovery stays queued and suppresses duplicate in
     && task.id !== blocker.task.id
     && task.payload?.kind === "wechat_work_messages"
   ));
-  assert.equal(queuedQrTasks.length, 1);
+  assert.equal(queuedQrTasks.length, 0);
 });
 
 test("a failed specialist QR recovery requeues the same durable task on the next inbound window", async () => {
@@ -1037,6 +1052,7 @@ test("a failed specialist QR recovery requeues the same durable task on the next
 
 test("selecting a new specialist permanently supersedes the old failed QR", async () => {
   const { api, localStore, service } = setup();
+  const nowSeconds = Math.floor(Date.now() / 1000);
   appConfig.wechatWorkExternalContactSecret = "external-contact-secret-test";
   api.visibleUserListResponse.dept_user.push({ userid: "member-second", department: 1 });
   api.upgradeConfigResponse.member_range.userid_list.push("member-second");
@@ -1055,6 +1071,7 @@ test("selecting a new specialist permanently supersedes the old failed QR", asyn
   const binding = localStore.upsertWechatWorkBinding({
     openKfid: "wk-upgrade-superseded",
     externalUserId: "wm-upgrade-superseded",
+    sendTime: nowSeconds - 60,
   });
   const identity = {
     wechatAccountId: binding.wechatAccountId,
@@ -1067,6 +1084,11 @@ test("selecting a new specialist permanently supersedes the old failed QR", asyn
     memberUserId: "member-owner",
     wording: "添加企业微信后，我继续为您服务。",
     requestId: "customer-upgrade:superseded-first",
+  });
+  localStore.upsertWechatWorkBinding({
+    openKfid: binding.openKfid,
+    externalUserId: binding.externalUserId,
+    sendTime: nowSeconds + 10,
   });
   const second = await service.upgradeCustomerToMemberService({
     ...identity,
@@ -1088,15 +1110,20 @@ test("selecting a new specialist permanently supersedes the old failed QR", asyn
   assert.equal(localStore.getWechatWorkCustomerUpgrade(firstId).status, "superseded");
   assert.equal(localStore.getWechatWorkCustomerUpgrade(secondId).status, "failed");
 
+  const bindingAfterSecondInbound = localStore.upsertWechatWorkBinding({
+    openKfid: binding.openKfid,
+    externalUserId: binding.externalUserId,
+    sendTime: nowSeconds + 20,
+  });
   const recovered = await service.resumePendingCustomerUpgradeQrAfterInbound({
-    binding,
+    binding: bindingAfterSecondInbound,
     msgid: "inbound-recovers-current-specialist-only",
   });
   assert.equal(recovered.upgrade.id, secondId);
   assert.equal(recovered.upgrade.memberUserId, "member-second");
   assert.equal(recovered.upgrade.status, "api_accepted");
   const staleRecovery = await service.resumePendingCustomerUpgradeQrAfterInbound({
-    binding,
+    binding: bindingAfterSecondInbound,
     msgid: "inbound-must-not-recover-old-specialist",
   });
   assert.equal(staleRecovery, null);
@@ -1137,7 +1164,15 @@ test("specialist QR recovery runs before the inbound route can apply a manual lo
   assert.equal(processed.status, "processed");
   assert.equal(processed.result.plan.type, "service_action_completed");
   assert.equal(processed.result.plan.reason, "customer_upgrade_qr_recovered");
-  assert.equal(processed.result.sendTask, null);
+  assert.equal(processed.result.plan.noInterceptFallback, true);
+  assert.equal(processed.result.plan.acknowledgementOnly, true);
+  assert.equal(processed.result.sendTask.wechatAccountId, binding.wechatAccountId);
+  assert.equal(processed.result.sendTask.conversationId, binding.conversationId);
+  assert.equal(processed.result.sendTask.customerId, binding.customerId);
+  assert.equal(processed.immediateReply.ok, true);
+  assert.equal(processed.immediateReply.task.status, "sent");
+  assert.equal(api.sendCalls.at(-1).externalUserId, binding.externalUserId);
+  assert.match(api.sendCalls.at(-1).text, /收到您的消息/);
   assert.equal(processed.result.notification, null);
   assert.equal(
     localStore.listConversations().find((item) => item.id === binding.conversationId).manualLocked,
@@ -1148,7 +1183,7 @@ test("specialist QR recovery runs before the inbound route can apply a manual lo
   assert.equal(status.imageStatus, "api_accepted");
   assert.deepEqual(
     api.operationCalls.slice(operationsAfterFirst).map((item) => item.type),
-    ["upload", "image"],
+    ["upload", "image", "text"],
   );
 });
 
@@ -1193,6 +1228,331 @@ test("operator QR recovery uses the latest inbound message and selected speciali
   assert.equal(recovered.triggerMsgid, "operator-retry-inbound");
   assert.equal(recovered.status.status, "api_accepted");
   assert.equal(recovered.status.imageStatus, "api_accepted");
+});
+
+test("operator QR recovery sends a stale ready contact way without creating another QR", async () => {
+  const { api, localStore, service } = setup();
+  appConfig.wechatWorkExternalContactSecret = "external-contact-secret-test";
+  const binding = localStore.upsertWechatWorkBinding({
+    openKfid: "wk-upgrade-ready-recovery",
+    externalUserId: "wm-upgrade-ready-recovery",
+  });
+  const memberUserId = "member-owner";
+  const upgradeId = deterministicOperationId(
+    "wwupgrade",
+    `${appConfig.wechatWorkCorpId}:${binding.openKfid}:${binding.externalUserId}:${memberUserId}`,
+  );
+  const state = `lt_${crypto.createHash("sha256").update(upgradeId).digest("hex").slice(0, 20)}`;
+  const localPath = writePng(path.join(appConfig.localStorageRoot, "ready-recovery-qr.png"));
+  localStore.claimWechatWorkCustomerUpgrade({
+    id: upgradeId,
+    corpId: appConfig.wechatWorkCorpId,
+    openKfid: binding.openKfid,
+    externalUserId: binding.externalUserId,
+    wechatAccountId: binding.wechatAccountId,
+    conversationId: binding.conversationId,
+    customerId: binding.customerId,
+    memberUserId,
+    state,
+    claimToken: "customer-upgrade:interrupted-process",
+  });
+  localStore.updateWechatWorkCustomerUpgrade(upgradeId, {
+    status: "ready",
+    configId: "contact-way-ready-recovery",
+    qrCodeUrl: "https://p.qpic.cn/external-contact-qr/ready-recovery",
+    localPath,
+    claimToken: null,
+  });
+  localStore.upsertWechatWorkAudit({
+    id: deterministicOperationId("wwaudit", `customer-upgrade:${binding.externalUserId}:${memberUserId}`),
+    action: "customer_upgrade_recommended",
+    status: "pending",
+    openKfid: binding.openKfid,
+    externalUserId: binding.externalUserId,
+    wechatAccountId: binding.wechatAccountId,
+    conversationId: binding.conversationId,
+    customerId: binding.customerId,
+    memberUserId,
+    operationKey: "customer-upgrade:interrupted-process",
+    lockStartedAt: new Date(Date.now() - 60_000).toISOString(),
+  });
+  const payload = {
+    wechatAccountId: binding.wechatAccountId,
+    conversationId: binding.conversationId,
+    customerId: binding.customerId,
+    memberUserId,
+  };
+  localStore.updateConversation(binding.conversationId, { manualLocked: true });
+
+  const before = await service.getCustomerUpgradeStatus(payload);
+  assert.equal(before.status, "ready");
+  assert.equal(before.deliveryPending, false);
+  assert.equal(before.qrRecoveryAvailable, true);
+
+  const recovered = await service.retryPendingCustomerUpgradeQr(payload);
+  assert.equal(recovered.recovered, true);
+  assert.equal(recovered.triggerMsgid, null);
+  assert.equal(recovered.status.status, "api_accepted");
+  assert.equal(recovered.status.imageStatus, "api_accepted");
+  assert.equal(api.externalContactWayCalls.length, 0);
+  assert.equal(api.externalContactQrDownloadCalls.length, 0);
+  assert.equal(api.customerUpgradeCalls.length, 0);
+  assert.deepEqual(api.operationCalls.map((item) => item.type), ["upload", "image", "text"]);
+  const sendTask = localStore.getSendTask(recovered.status.sendTaskId);
+  assert.equal(sendTask.payload.source, "manual_reply");
+  assert.equal(sendTask.payload.manualReply, true);
+  assert.equal(sendTask.guardSnapshot.manualReply, true);
+});
+
+test("operator can resend the same specialist QR repeatedly even when the conversation is manually locked", async () => {
+  const { api, localStore, service } = setup();
+  appConfig.wechatWorkExternalContactSecret = "external-contact-secret-test";
+  const binding = localStore.upsertWechatWorkBinding({
+    openKfid: "wk-upgrade-manual-resend",
+    externalUserId: "wm-upgrade-manual-resend",
+  });
+  const payload = {
+    wechatAccountId: binding.wechatAccountId,
+    conversationId: binding.conversationId,
+    customerId: binding.customerId,
+    memberUserId: "member-owner",
+    wording: "添加企业微信后，我继续为您服务。",
+  };
+  const first = await service.upgradeCustomerToMemberService({
+    ...payload,
+    requestId: "customer-upgrade:manual-resend:first",
+  });
+  assert.equal(first.customerDeliveryApiAccepted, true);
+  const initialStatus = await service.getCustomerUpgradeStatus(payload);
+  assert.equal(initialStatus.manualResendAvailable, true);
+  localStore.updateConversation(binding.conversationId, { manualLocked: true });
+
+  const second = await service.resendCustomerUpgradeQr({
+    ...payload,
+    requestId: "customer-upgrade:manual-resend:second",
+  });
+  const third = await service.resendCustomerUpgradeQr({
+    ...payload,
+    requestId: "customer-upgrade:manual-resend:third",
+  });
+
+  assert.equal(second.manualResend, true);
+  assert.equal(third.manualResend, true);
+  assert.equal(second.customerDeliveryApiAccepted, true);
+  assert.equal(third.customerDeliveryApiAccepted, true);
+  assert.notEqual(first.sendTaskId, second.sendTaskId);
+  assert.notEqual(second.sendTaskId, third.sendTaskId);
+  assert.equal(api.externalContactWayCalls.length, 1);
+  assert.equal(api.externalContactQrDownloadCalls.length, 1);
+  assert.equal(api.customerUpgradeCalls.length, 1);
+  assert.deepEqual(api.operationCalls.map((item) => item.type), [
+    "upload", "image", "text",
+    "upload", "image", "text",
+    "upload", "image", "text",
+  ]);
+  for (const sendTaskId of [second.sendTaskId, third.sendTaskId]) {
+    const task = localStore.getSendTask(sendTaskId);
+    assert.equal(task.payload.source, "manual_reply");
+    assert.equal(task.payload.manualReply, true);
+    assert.equal(task.guardSnapshot.manualReply, true);
+  }
+  assert.equal(
+    localStore.listWechatWorkAuditLogs(100)
+      .filter((item) => item.action === "customer_upgrade_qr_manual_resend_api_accepted").length,
+    2,
+  );
+});
+
+test("manual specialist QR resend cancels an older queued QR task before sending the replacement", async () => {
+  const { localStore, service } = setup();
+  appConfig.wechatWorkExternalContactSecret = "external-contact-secret-test";
+  const binding = localStore.upsertWechatWorkBinding({
+    openKfid: "wk-upgrade-manual-replaces-queued",
+    externalUserId: "wm-upgrade-manual-replaces-queued",
+  });
+  const payload = {
+    wechatAccountId: binding.wechatAccountId,
+    conversationId: binding.conversationId,
+    customerId: binding.customerId,
+    memberUserId: "member-owner",
+    wording: "添加企业微信后，我继续为您服务。",
+  };
+  await service.upgradeCustomerToMemberService({
+    ...payload,
+    requestId: "customer-upgrade:replace-queued:first",
+  });
+  const upgradeId = deterministicOperationId(
+    "wwupgrade",
+    `${appConfig.wechatWorkCorpId}:${binding.openKfid}:${binding.externalUserId}:member-owner`,
+  );
+  const upgrade = localStore.getWechatWorkCustomerUpgrade(upgradeId);
+  const oldQueuedTask = localStore.createSendTask({
+    operationKey: "customer-upgrade:replace-queued:old-task",
+    wechatAccountId: binding.wechatAccountId,
+    conversationId: binding.conversationId,
+    customerId: binding.customerId,
+    payload: {
+      kind: "wechat_work_messages",
+      messages: [{ msgtype: "image", mediaPath: upgrade.localPath }],
+    },
+  });
+  localStore.updateWechatWorkCustomerUpgrade(upgradeId, {
+    status: "queued",
+    sendTaskId: oldQueuedTask.id,
+    imageStatus: "queued",
+    textStatus: "not_started",
+  });
+
+  const resent = await service.resendCustomerUpgradeQr({
+    ...payload,
+    requestId: "customer-upgrade:replace-queued:manual",
+  });
+
+  assert.equal(resent.customerDeliveryApiAccepted, true);
+  assert.notEqual(resent.sendTaskId, oldQueuedTask.id);
+  const cancelled = localStore.getSendTask(oldQueuedTask.id);
+  assert.equal(cancelled.status, "cancelled");
+  assert.match(cancelled.errorMessage, /人工重新发送/);
+});
+
+test("specialist QR checks the official session state and does not create a doomed send task after the session ended", async () => {
+  const { api, localStore, service } = setup();
+  appConfig.wechatWorkExternalContactSecret = "external-contact-secret-test";
+  const binding = localStore.upsertWechatWorkBinding({
+    openKfid: "wk-upgrade-ended-session",
+    externalUserId: "wm-upgrade-ended-session",
+  });
+  const payload = {
+    wechatAccountId: binding.wechatAccountId,
+    conversationId: binding.conversationId,
+    customerId: binding.customerId,
+    memberUserId: "member-owner",
+    wording: "添加企业微信后，我继续为您服务。",
+  };
+  const first = await service.upgradeCustomerToMemberService({
+    ...payload,
+    requestId: "customer-upgrade:ended-session:first",
+  });
+  assert.equal(first.customerDeliveryApiAccepted, true);
+  assert.equal(api.operationCalls.length, 3);
+
+  api.serviceStateResponse = { errcode: 0, errmsg: "ok", service_state: 4 };
+  await assert.rejects(
+    () => service.resendCustomerUpgradeQr({
+      ...payload,
+      requestId: "customer-upgrade:ended-session:resend",
+    }),
+    (error) => error?.status === 400
+      && /会话已结束/.test(error.message)
+      && /重新进入该客服并发送一条消息/.test(error.message),
+  );
+
+  assert.equal(api.serviceStateGetCalls.length, 2);
+  assert.equal(api.operationCalls.length, 3);
+  assert.equal(localStore.listSendTasks().length, 1);
+});
+
+test("specialist QR stops doomed 95001 retries until a newer customer inbound message arrives", async () => {
+  const { api, localStore, service } = setup();
+  appConfig.wechatWorkExternalContactSecret = "external-contact-secret-test";
+  const binding = localStore.upsertWechatWorkBinding({
+    openKfid: "wk-upgrade-quota-exhausted",
+    externalUserId: "wm-upgrade-quota-exhausted",
+    sendTime: Math.floor(Date.now() / 1000) - 60,
+  });
+  const payload = {
+    wechatAccountId: binding.wechatAccountId,
+    conversationId: binding.conversationId,
+    customerId: binding.customerId,
+    memberUserId: "member-owner",
+    wording: "添加企业微信后，我继续为您服务。",
+  };
+  const first = await service.upgradeCustomerToMemberService({
+    ...payload,
+    requestId: "customer-upgrade:quota:first",
+  });
+  assert.equal(first.customerDeliveryApiAccepted, true);
+
+  api.imageSendFailures.push(new WechatWorkApiError("send_msg", "send msg count limit", { errcode: 95001 }));
+  await assert.rejects(
+    () => service.resendCustomerUpgradeQr({
+      ...payload,
+      requestId: "customer-upgrade:quota:rejected-by-wecom",
+    }),
+    (error) => error?.status === 400
+      && /95001/.test(error.message)
+      && /不是本系统的重复发送限制/.test(error.message)
+      && /客户先在微信中发送一条新消息/.test(error.message),
+  );
+  const taskCountAfterOfficialFailure = localStore.listSendTasks().length;
+  assert.equal(taskCountAfterOfficialFailure, 2);
+
+  await assert.rejects(
+    () => service.resendCustomerUpgradeQr({
+      ...payload,
+      requestId: "customer-upgrade:quota:blocked-before-queue",
+    }),
+    (error) => error?.status === 400 && /95001/.test(error.message),
+  );
+  assert.equal(localStore.listSendTasks().length, taskCountAfterOfficialFailure);
+  assert.equal(api.operationCalls.filter((item) => item.type === "image").length, 2);
+
+  localStore.upsertWechatWorkBinding({
+    openKfid: binding.openKfid,
+    externalUserId: binding.externalUserId,
+    sendTime: Math.floor(Date.now() / 1000) + 10,
+  });
+  const recovered = await service.resendCustomerUpgradeQr({
+    ...payload,
+    requestId: "customer-upgrade:quota:after-new-inbound",
+  });
+  assert.equal(recovered.customerDeliveryApiAccepted, true);
+  assert.equal(localStore.listSendTasks().length, taskCountAfterOfficialFailure + 1);
+});
+
+test("operator can manually resend a saved QR after another specialist superseded it", async () => {
+  const { api, localStore, service } = setup();
+  appConfig.wechatWorkExternalContactSecret = "external-contact-secret-test";
+  const binding = localStore.upsertWechatWorkBinding({
+    openKfid: "wk-upgrade-superseded-manual",
+    externalUserId: "wm-upgrade-superseded-manual",
+  });
+  const payload = {
+    wechatAccountId: binding.wechatAccountId,
+    conversationId: binding.conversationId,
+    customerId: binding.customerId,
+    memberUserId: "member-owner",
+    wording: "添加企业微信后，我继续为您服务。",
+  };
+  const first = await service.upgradeCustomerToMemberService({
+    ...payload,
+    requestId: "customer-upgrade:superseded-manual:first",
+  });
+  const upgradeId = deterministicOperationId(
+    "wwupgrade",
+    `${appConfig.wechatWorkCorpId}:${binding.openKfid}:${binding.externalUserId}:member-owner`,
+  );
+  localStore.updateWechatWorkCustomerUpgrade(upgradeId, {
+    status: "superseded",
+    errorMessage: "客户已选择新的长期服务专员，此二维码不再自动恢复。",
+  });
+  localStore.updateConversation(binding.conversationId, { manualLocked: true });
+
+  const status = await service.getCustomerUpgradeStatus(payload);
+  assert.equal(status.status, "superseded");
+  assert.equal(status.manualResendAvailable, true);
+  assert.match(status.detail, /可以人工再次发送/);
+
+  const resent = await service.resendCustomerUpgradeQr({
+    ...payload,
+    requestId: "customer-upgrade:superseded-manual:again",
+  });
+  assert.equal(resent.customerDeliveryApiAccepted, true);
+  assert.notEqual(resent.sendTaskId, first.sendTaskId);
+  assert.deepEqual(api.operationCalls.map((item) => item.type), [
+    "upload", "image", "text",
+    "upload", "image", "text",
+  ]);
 });
 
 test("specialist QR delivery resumes a persisted remote contact way without creating another one", async () => {
@@ -1393,7 +1753,7 @@ test("long-term customer upgrade reuses the existing application credential and 
   assert.equal(config.customerContact.credentialSource, "wechat_work_shared");
   assert.equal(config.customerContact.blockerCode, "CUSTOMER_CONTACT_PERMISSION_MISSING");
   assert.deepEqual(config.customerContact.applications, [{ agentId: 1000003, name: "臻希AI" }]);
-  assert.match(config.customerContact.detail, /无需寻找第二个 Secret/);
+  assert.match(config.customerContact.detail, /同一个 Secret/);
 
   await assert.rejects(
     () => service.upgradeCustomerToMemberService({
@@ -1653,32 +2013,34 @@ test("official rich customer-service messages queue, validate, audit, and dispat
   assert.deepEqual(audit.messageTypes, ["link", "msgmenu", "location", "voice", "video"]);
 });
 
-test("direct official dispatch defers a later task until it reaches the account queue head", async () => {
+test("direct official dispatch does not wait behind another customer on the same account", async () => {
   const { api, localStore, service } = setup();
-  const binding = localStore.upsertWechatWorkBinding({ openKfid: "wk-serial", externalUserId: "wm-serial" });
+  const firstBinding = localStore.upsertWechatWorkBinding({ openKfid: "wk-parallel", externalUserId: "wm-first" });
+  const secondBinding = localStore.upsertWechatWorkBinding({ openKfid: "wk-parallel", externalUserId: "wm-second" });
+  assert.equal(firstBinding.wechatAccountId, secondBinding.wechatAccountId);
   const first = await service.queueCustomerServiceText({
-    requestId: "wechat-work:serial-first",
-    openKfid: binding.openKfid,
-    externalUserId: binding.externalUserId,
+    requestId: "wechat-work:parallel-first",
+    openKfid: firstBinding.openKfid,
+    externalUserId: firstBinding.externalUserId,
     text: "第一条",
   });
   const second = await service.queueCustomerServiceText({
-    requestId: "wechat-work:serial-second",
-    openKfid: binding.openKfid,
-    externalUserId: binding.externalUserId,
+    requestId: "wechat-work:parallel-second",
+    openKfid: secondBinding.openKfid,
+    externalUserId: secondBinding.externalUserId,
     text: "第二条",
   });
 
-  const deferred = await service.dispatchCustomerServiceText(second.task.id);
-  assert.equal(deferred.deferred, true);
-  assert.equal(deferred.reason, "not_account_queue_head");
-  assert.equal(deferred.queueHeadId, first.task.id);
-  assert.equal(api.sendCalls.length, 0);
-  assert.equal(localStore.getSendTask(second.task.id).status, "queued");
+  const delivered = await service.dispatchCustomerServiceText(second.task.id);
+  assert.equal(delivered.task.status, "sent");
+  assert.equal(localStore.getSendTask(first.task.id).status, "queued");
+  assert.deepEqual(api.sendCalls.map((item) => [item.externalUserId, item.text]), [["wm-second", "第二条"]]);
 
   await service.dispatchCustomerServiceText(first.task.id);
-  await service.dispatchCustomerServiceText(second.task.id);
-  assert.deepEqual(api.sendCalls.map((item) => item.text), ["第一条", "第二条"]);
+  assert.deepEqual(api.sendCalls.map((item) => [item.externalUserId, item.text]), [
+    ["wm-second", "第二条"],
+    ["wm-first", "第一条"],
+  ]);
 });
 
 test("event msgmenu replies use a single-use welcome credential and clear sealed event code", async () => {
@@ -2052,6 +2414,77 @@ test("upgrade configuration reports missing Enterprise WeChat permission as an a
   );
 });
 
+test("upgrade configuration reports an untrusted outbound IP without asking for another secret", async () => {
+  const { api, service } = setup();
+  api.getUpgradeServiceConfig = async () => {
+    throw new WechatWorkApiError(
+      "get_upgrade_service_config",
+      "wechat work get_upgrade_service_config failed: not allow to access from your ip, from ip: 192.0.2.10",
+      {
+        errcode: 60020,
+        response: {
+          errcode: 60020,
+          errmsg: "not allow to access from your ip, from ip: 192.0.2.10",
+        },
+      },
+    );
+  };
+
+  await assert.rejects(
+    () => service.getUpgradeServiceConfig(),
+    (error) => error?.status === 400
+      && /192\.0\.2\.10/.test(error.message)
+      && /企业可信 IP/.test(error.message)
+      && /应用管理 → 微信客服 → API → 可调用接口的应用/.test(error.message)
+      && /不是 Secret 缺失/.test(error.message),
+  );
+});
+
+test("unverified specialist returns a clear Chinese error and does not leave a false reusable QR", async () => {
+  const { api, localStore, service } = setup();
+  appConfig.wechatWorkExternalContactSecret = "external-contact-secret-test";
+  const binding = localStore.upsertWechatWorkBinding({
+    openKfid: "wk-upgrade-unverified-member",
+    externalUserId: "wm-upgrade-unverified-member",
+  });
+  api.createExternalContactWay = async (payload) => {
+    api.externalContactWayCalls.push(payload);
+    throw new WechatWorkApiError(
+      "externalcontact_add_contact_way",
+      "user real name has not been verified",
+      { errcode: 40098, response: { errcode: 40098, errmsg: "user real name has not been verified" } },
+    );
+  };
+  const payload = {
+    wechatAccountId: binding.wechatAccountId,
+    conversationId: binding.conversationId,
+    customerId: binding.customerId,
+    memberUserId: "member-owner",
+    wording: "添加企业微信后，我继续为您服务。",
+  };
+
+  await assert.rejects(
+    () => service.upgradeCustomerToMemberService({
+      ...payload,
+      requestId: "customer-upgrade:unverified-member",
+    }),
+    (error) => error?.status === 400 && /成员实名认证/.test(error.message) && /改选已有二维码/.test(error.message),
+  );
+  const status = await service.getCustomerUpgradeStatus(payload);
+  assert.equal(status.status, "resource_failed");
+  assert.equal(status.manualResendAvailable, false);
+  assert.match(status.detail, /成员实名认证/);
+  assert.doesNotMatch(status.detail, /externalcontact_add_contact_way|from ip/);
+  const upgrade = localStore.getWechatWorkCustomerUpgrade(
+    deterministicOperationId(
+      "wwupgrade",
+      `${appConfig.wechatWorkCorpId}:${binding.openKfid}:${binding.externalUserId}:member-owner`,
+    ),
+  );
+  assert.equal(upgrade.claimToken, null);
+  assert.equal(upgrade.claimExpiresAt, null);
+});
+
 test("long-term customer upgrade respects an in-flight semantic lock", async () => {
   const { api, localStore, service } = setup();
   appConfig.wechatWorkExternalContactSecret = "external-contact-secret-test";
@@ -2084,6 +2517,13 @@ test("long-term customer upgrade respects an in-flight semantic lock", async () 
   assert.equal(result.recommendationPending, true);
   assert.equal(result.recommendationAuditId, auditId);
   assert.equal(api.customerUpgradeCalls.length, 0);
+  const status = await service.getCustomerUpgradeStatus({
+    wechatAccountId: binding.wechatAccountId,
+    conversationId: binding.conversationId,
+    customerId: binding.customerId,
+    memberUserId: "member-owner",
+  });
+  assert.equal(status.qrRecoveryAvailable, false);
 });
 
 test("customer entry reports mismatched Enterprise WeChat credential mode as an actionable client error", async () => {
@@ -2094,7 +2534,7 @@ test("customer entry reports mismatched Enterprise WeChat credential mode as an 
 
   await assert.rejects(
     () => service.createCustomerEntryContactWay(),
-    (error) => error?.status === 400 && /联合版微信客服/.test(error.message) && /独立版 Secret/.test(error.message),
+    (error) => error?.status === 400 && /凭证模式/.test(error.message) && /自建应用 Secret/.test(error.message),
   );
 });
 
@@ -2164,7 +2604,7 @@ test("live connection diagnosis exposes the real 95011 credential-mode blocker",
   assert.equal(diagnosis.ready, false);
   assert.equal(diagnosis.credentialCompatible, false);
   assert.equal(diagnosis.blockerCode, "CREDENTIAL_MODE_MISMATCH_95011");
-  assert.match(diagnosis.detail, /微信客服 Secret/);
+  assert.match(diagnosis.detail, /自建应用 Secret/);
 });
 
 test("customer-service Secret is verified before being saved with an official account", async () => {
@@ -2201,6 +2641,49 @@ test("customer-service Secret is verified before being saved with an official ac
     assert.equal(api.validatedSecret, "new-customer-service-secret-123");
     assert.deepEqual(api.syncCalls, [{ token: undefined, cursor: "", limit: 100, openKfid: "wk-default" }]);
     assert.deepEqual(api.contactWayCalls, [{ openKfid: "wk-default", scene: "smart_kefu_customer_entry" }]);
+  } finally {
+    if (previousEnvFile === undefined) delete process.env.DESKTOP_ENV_FILE;
+    else process.env.DESKTOP_ENV_FILE = previousEnvFile;
+  }
+});
+
+test("first enterprise setup atomically persists callback and automation settings without returning secrets", async () => {
+  const { api, service, tempDir } = setup();
+  const envFile = path.join(tempDir, "runtime.env");
+  fs.writeFileSync(envFile, "UNCHANGED_VALUE=keep\n", "utf8");
+  const previousEnvFile = process.env.DESKTOP_ENV_FILE;
+  process.env.DESKTOP_ENV_FILE = envFile;
+  try {
+    const encodingAesKey = "a".repeat(43);
+    const validation = await service.validateCustomerServiceCredential({
+      corpId: "ww-first-company",
+      secret: "first-setup-secret-123456",
+    });
+    assert.equal(validation.valid, true);
+    const saved = await service.saveCustomerServiceCredential({
+      corpId: "ww-first-company",
+      secret: "first-setup-secret-123456",
+      openKfid: "wk-default",
+      callbackToken: "first-callback-token",
+      encodingAesKey,
+      publicBaseUrl: "https://kefu.example.com/",
+      enableAutomaticReplies: true,
+    });
+    assert.equal(saved.saved, true);
+    assert.equal(api.validatedCorpId, "ww-first-company");
+    const persisted = fs.readFileSync(envFile, "utf8");
+    assert.match(persisted, /UNCHANGED_VALUE=keep/);
+    assert.match(persisted, /WECHAT_WORK_CORP_ID=ww-first-company/);
+    assert.match(persisted, /WECHAT_WORK_SECRET=first-setup-secret-123456/);
+    assert.match(persisted, /WECHAT_WORK_TOKEN=first-callback-token/);
+    assert.match(persisted, new RegExp(`WECHAT_WORK_ENCODING_AES_KEY=${encodingAesKey}`));
+    assert.match(persisted, /CUSTOMER_SERVICE_PUBLIC_BASE_URL=https:\/\/kefu\.example\.com/);
+    assert.match(persisted, /WECHAT_SEND_ADAPTER=wechat_work_kf/);
+    assert.match(persisted, /WECHAT_WORK_AUTO_SYNC_ENABLED=1/);
+    assert.match(persisted, /LOW_VALUE_AUTOMATION_ENABLED=1/);
+    assert.equal(JSON.stringify(saved).includes("first-setup-secret-123456"), false);
+    assert.equal(JSON.stringify(saved).includes("first-callback-token"), false);
+    assert.equal(JSON.stringify(saved).includes(encodingAesKey), false);
   } finally {
     if (previousEnvFile === undefined) delete process.env.DESKTOP_ENV_FILE;
     else process.env.DESKTOP_ENV_FILE = previousEnvFile;
@@ -2288,6 +2771,65 @@ test("sync_msg persists isolated open_kfid + external_userid mappings and dedupl
   assert.equal(imageOperation.normalizedPayload.attachments[0].mediaId, "media-1");
   assert.equal(imageOperation.normalizedPayload.attachments[0].type, "image/png");
   assert.equal("localPath" in imageOperation.normalizedPayload.attachments[0], false);
+});
+
+test("sync_msg replies to different customers immediately in parallel without crossing identities", async () => {
+  const { api, localStore, service } = setup();
+  let activeSends = 0;
+  let maxActiveSends = 0;
+  api.sendText = async function sendText(payload) {
+    this.sendCalls.push(payload);
+    activeSends += 1;
+    maxActiveSends = Math.max(maxActiveSends, activeSends);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    activeSends -= 1;
+    return { errcode: 0, errmsg: "ok", msgid: `api-${payload.msgid}` };
+  };
+  api.syncResponse = {
+    errcode: 0,
+    errmsg: "ok",
+    has_more: 0,
+    next_cursor: "parallel-customer-cursor-1",
+    msg_list: [
+      {
+        msgid: "parallel-customer-message-a",
+        open_kfid: "wk-parallel-customers",
+        external_userid: "wm-parallel-a",
+        msgtype: "text",
+        text: { content: "客户 A 的问题" },
+      },
+      {
+        msgid: "parallel-customer-message-b",
+        open_kfid: "wk-parallel-customers",
+        external_userid: "wm-parallel-b",
+        msgtype: "text",
+        text: { content: "客户 B 的问题" },
+      },
+    ],
+  };
+
+  const result = await service.syncCustomerServiceMessages({
+    token: "sync-token",
+    openKfid: "wk-parallel-customers",
+  });
+
+  assert.equal(result.processedCount, 2);
+  assert.equal(maxActiveSends, 2);
+  assert.deepEqual(
+    api.sendCalls.map((item) => item.externalUserId).sort(),
+    ["wm-parallel-a", "wm-parallel-b"],
+  );
+  assert.ok(result.processed.every((item) => item.immediateReply?.ok === true));
+  for (const item of result.processed) {
+    assert.equal(item.immediateReply.task.status, "sent");
+    assert.equal(item.immediateReply.task.wechatAccountId, item.binding.wechatAccountId);
+    assert.equal(item.immediateReply.task.conversationId, item.binding.conversationId);
+    assert.equal(item.immediateReply.task.customerId, item.binding.customerId);
+  }
+  const immediateAudits = localStore.listWechatWorkAuditLogs(100)
+    .filter((item) => item.action === "inbound_reply_immediate_dispatch");
+  assert.equal(immediateAudits.length, 2);
+  assert.ok(immediateAudits.every((item) => item.status === "sent" && item.queueWaitMs === 0));
 });
 
 test("sync_msg event creates a bound one-time reply credential without storing raw event code", async () => {
@@ -2412,7 +2954,7 @@ test("sync_msg downloads voice with its own limit, transcribes it, and routes th
   assert.equal(message.attachments[0].mediaUnderstanding.status, "understood");
 });
 
-test("failed image understanding blocks placeholder auto-replies and routes to manual review", async () => {
+test("failed image understanding sends a safe acknowledgement and routes to manual review", async () => {
   const inboundUnderstanding = new WechatWorkInboundUnderstandingService({
     async understandImages() {
       throw new Error("vision provider unavailable");
@@ -2444,7 +2986,17 @@ test("failed image understanding blocks placeholder auto-replies and routes to m
   assert.match(message.text, /图片处理失败.*人工查看/);
   assert.equal(route.action, "manual_review");
   assert.equal(route.routingPolicy.canQueueAutoReply, false);
-  assert.equal(api.sendCalls.length, 0);
+  assert.equal(result.processed[0].result.plan.noInterceptFallback, true);
+  assert.equal(result.processed[0].result.plan.acknowledgementOnly, true);
+  assert.equal(result.processed[0].immediateReply.ok, true);
+  assert.equal(result.processed[0].immediateReply.task.status, "sent");
+  assert.equal(result.processed[0].immediateReply.task.wechatAccountId, binding.wechatAccountId);
+  assert.equal(result.processed[0].immediateReply.task.conversationId, binding.conversationId);
+  assert.equal(result.processed[0].immediateReply.task.customerId, binding.customerId);
+  assert.equal(api.sendCalls.length, 1);
+  assert.equal(api.sendCalls[0].externalUserId, binding.externalUserId);
+  assert.match(api.sendCalls[0].text, /收到您的消息/);
+  assert.doesNotMatch(api.sendCalls[0].text, /图片处理失败/);
   assert.ok(localStore.listWechatWorkAuditLogs().some((item) => item.action === "inbound_media_manual_review"));
 });
 
@@ -2645,15 +3197,7 @@ test("transient or delayed inbound media failure is audited without advancing du
 });
 
 test("encrypted callback acknowledges immediately and forwards Token + OpenKfId to sync_msg", async () => {
-  const { api, dispatch, localStore, service } = setup();
-  let immediateReplyRuns = 0;
-  const originalProcessSafeSendQueue = dispatch.processSafeSendQueue.bind(dispatch);
-  dispatch.processSafeSendQueue = async (params) => {
-    immediateReplyRuns += 1;
-    assert.equal(params.automationOnly, true);
-    assert.equal(params.inboundReplyOnly, true);
-    return originalProcessSafeSendQueue(params);
-  };
+  const { api, localStore, service } = setup();
   api.syncResponse = {
     errcode: 0,
     errmsg: "ok",
@@ -2674,14 +3218,50 @@ test("encrypted callback acknowledges immediately and forwards Token + OpenKfId 
 
   const response = await service.handleCallback(query, `<xml><Encrypt><![CDATA[${encrypted}]]></Encrypt></xml>`);
   assert.equal(response, "success");
-  await new Promise((resolve) => setTimeout(resolve, 120));
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (localStore.listWechatWorkAuditLogs(20).some((item) => item.action === "callback_sync_completed")) break;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
   assert.equal(api.syncCalls.length, 1);
   assert.equal(api.syncCalls[0].token, "callback-sync-token");
   assert.equal(api.syncCalls[0].openKfid, "wk-callback");
-  assert.equal(immediateReplyRuns, 1);
+  assert.equal(api.sendCalls.length, 1);
+  assert.equal(api.sendCalls[0].externalUserId, "wm-callback-customer");
+  assert.ok(localStore.listWechatWorkAuditLogs(20).some((item) => (
+    item.action === "inbound_reply_immediate_dispatch"
+    && item.status === "sent"
+    && item.queueWaitMs === 0
+  )));
   assert.ok(localStore.listWechatWorkAuditLogs(20).some((item) => (
     item.action === "callback_sync_completed"
     && item.processedCount === 1
+  )));
+});
+
+test("signal-only callback mode delegates sync to the fixed-egress desktop relay without a duplicate server sync", async () => {
+  const callbackEvents = {
+    published: [],
+    publish(openKfid) {
+      this.published.push(openKfid);
+    },
+  };
+  const { api, localStore, service } = setup({ callbackEvents });
+  appConfig.wechatWorkCallbackProcessingMode = "signal_only";
+  const xml = "<xml><ToUserName><![CDATA[corp-test]]></ToUserName><CreateTime>1710000000</CreateTime><MsgType><![CDATA[event]]></MsgType><Event><![CDATA[kf_msg_or_event]]></Event><Token><![CDATA[server-callback-token]]></Token><OpenKfId><![CDATA[wk-fixed-egress]]></OpenKfId></xml>";
+  const encrypted = encryptCallback(xml, appConfig.wechatWorkEncodingAesKey, appConfig.wechatWorkCorpId);
+  const query = { timestamp: "1710000000", nonce: "nonce-fixed-egress" };
+  query.msg_signature = sha1Sorted([appConfig.wechatWorkToken, query.timestamp, query.nonce, encrypted]);
+
+  const response = await service.handleCallback(query, `<xml><Encrypt><![CDATA[${encrypted}]]></Encrypt></xml>`);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  assert.equal(response, "success");
+  assert.deepEqual(callbackEvents.published, ["wk-fixed-egress"]);
+  assert.equal(api.syncCalls.length, 0);
+  assert.ok(localStore.listWechatWorkAuditLogs(20).some((item) => (
+    item.action === "callback_sync_delegated"
+    && item.status === "processed"
+    && item.openKfid === "wk-fixed-egress"
   )));
 });
 
@@ -2779,6 +3359,47 @@ test("transient inbound failure replays the same cursor and only terminal comple
   assert.equal(second.cursorCommitted, true);
   assert.equal(api.syncCalls.at(-1).cursor, "");
   assert.equal(localStore.getWechatWorkSyncCursor("wk-transient").nextCursor, "cursor-transient-next");
+});
+
+test("transient failure after message persistence resumes instead of terminalizing as a duplicate", async () => {
+  const { api, localStore, service } = setup();
+  api.syncResponse = {
+    errcode: 0,
+    errmsg: "ok",
+    has_more: 0,
+    next_cursor: "cursor-persisted-retry-next",
+    msg_list: [{
+      msgid: "persisted-retry-1",
+      open_kfid: "wk-persisted-retry",
+      external_userid: "wm-persisted-retry",
+      msgtype: "text",
+      text: { content: "你好，在吗？" },
+    }],
+  };
+  const originalCreateAgentTask = localStore.createAgentTask.bind(localStore);
+  let agentTaskCalls = 0;
+  localStore.createAgentTask = (payload) => {
+    agentTaskCalls += 1;
+    if (agentTaskCalls === 1) throw new Error("temporary agent task persistence outage");
+    return originalCreateAgentTask(payload);
+  };
+
+  const first = await service.syncCustomerServiceMessages({ token: "sync-token", openKfid: "wk-persisted-retry" });
+  const binding = localStore.getWechatWorkBinding("wk-persisted-retry", "wm-persisted-retry");
+  const retryable = localStore.getInboundMessageOperation(binding.wechatAccountId, "persisted-retry-1");
+  assert.equal(first.retryRequired, true);
+  assert.equal(first.cursorCommitted, false);
+  assert.equal(retryable.status, "retryable");
+  assert.equal(retryable.stage, "routed");
+  assert.ok(localStore.findMessageByExternalId(binding.conversationId, "persisted-retry-1"));
+
+  const second = await service.syncCustomerServiceMessages({ token: "sync-token", openKfid: "wk-persisted-retry" });
+  const completed = localStore.getInboundMessageOperation(binding.wechatAccountId, "persisted-retry-1");
+  assert.equal(second.processedCount, 1);
+  assert.equal(second.duplicateCount, 0);
+  assert.equal(second.cursorCommitted, true);
+  assert.equal(completed.status, "completed");
+  assert.equal(agentTaskCalls, 2);
 });
 
 test("bounded inbound failures become permanent manual review and then skip duplicate replay", async () => {
@@ -3064,7 +3685,7 @@ test("audited confirmed not sent outranks a later official API success", async (
   );
 });
 
-test("local restart recovery keeps stale official delivery unknown and blocks automatic replay idempotently", async () => {
+test("local restart recovery keeps stale official delivery unknown without blocking a new reply", async () => {
   const { api, localStore, dispatch, service } = setup();
   const binding = localStore.upsertWechatWorkBinding({ openKfid: "wk-restart-unknown", externalUserId: "wm-restart-unknown" });
   const stale = await service.queueCustomerServiceText({
@@ -3114,10 +3735,10 @@ test("local restart recovery keeps stale official delivery unknown and blocks au
     adapter: "wechat_work_kf",
     conversationId: binding.conversationId,
   });
-  assert.equal(api.sendCalls.length, 0);
-  assert.equal(queue.processed.length, 0);
-  assert.equal(queue.skipped[0].sendTaskId, queued.task.id);
-  assert.equal(queue.skipped[0].reason, "not_account_queue_head");
+  assert.equal(api.sendCalls.length, 1);
+  assert.equal(queue.processed.length, 1);
+  assert.equal(queue.processed[0].task.id, queued.task.id);
+  assert.equal(localStore.getSendTask(queued.task.id).status, "sent");
 });
 
 test("local restart recovery settles known official API failure and releases account queue", async () => {
@@ -3222,9 +3843,10 @@ test("local restart recovery keeps accepted official messages manual-review even
     adapter: "wechat_work_kf",
     conversationId: binding.conversationId,
   });
-  assert.deepEqual(queue.processed, []);
-  assert.equal(localStore.getSendTask(queued.task.id).status, "queued");
-  assert.deepEqual(api.sendCalls, []);
+  assert.equal(queue.processed.length, 1);
+  assert.equal(queue.processed[0].task.id, queued.task.id);
+  assert.equal(localStore.getSendTask(queued.task.id).status, "sent");
+  assert.equal(api.sendCalls.length, 1);
 });
 
 test("WeChat Work image send uploads and dispatches text plus multiple images in order", async () => {
@@ -3299,6 +3921,26 @@ test("WeChat Work invalid customer-service session fails once without automatic 
   assert.equal(result.attempt.metadata.deliveryState, "failed");
   assert.equal(result.attempt.metadata.automaticRetryBlocked, true);
   assert.equal(result.task.guardSnapshot.manualReviewRequired, false);
+  assert.ok(localStore.listWechatWorkAuditLogs().some((item) => item.action === "send_api_failed"));
+});
+
+test("WeChat Work untrusted outbound IP is configuration-blocked without automatic retry", async () => {
+  const { api, localStore, service } = setup();
+  const binding = localStore.upsertWechatWorkBinding({ openKfid: "wk-untrusted-ip", externalUserId: "wm-untrusted-ip" });
+  api.sendFailures.push(new WechatWorkApiError("send_msg", "not allow to access from your ip", { errcode: 60020 }));
+  const queued = await service.queueCustomerServiceText({
+    requestId: "wechat-work:test-untrusted-ip",
+    openKfid: binding.openKfid,
+    externalUserId: binding.externalUserId,
+    text: "route-only test reply",
+  });
+
+  const result = await service.dispatchCustomerServiceText(queued.task.id);
+  assert.equal(result.task.status, "failed");
+  assert.equal(result.retryScheduled, false);
+  assert.equal(api.sendCalls.length, 1);
+  assert.equal(result.attempt.metadata.deliveryState, "failed");
+  assert.equal(result.attempt.metadata.automaticRetryBlocked, true);
   assert.ok(localStore.listWechatWorkAuditLogs().some((item) => item.action === "send_api_failed"));
 });
 
@@ -3601,6 +4243,53 @@ test("official API client omits token for independent-mode recovery sync", async
   const result = await new WechatWorkApiClient().syncMessages({ openKfid: "wk-independent-client" });
   assert.equal(result.next_cursor, "independent-client-cursor");
   assert.equal(requests.length, 2);
+});
+
+test("official API client routes gettoken and sync_msg through the authenticated fixed-egress relay", async (t) => {
+  setup();
+  const originalFetch = global.fetch;
+  appConfig.wechatWorkApiBaseUrl = "https://kefu.zhenxiliye.cn/wecom-api";
+  appConfig.wechatWorkApiRelayToken = "a".repeat(64);
+  t.after(() => {
+    global.fetch = originalFetch;
+    appConfig.wechatWorkApiBaseUrl = "https://qyapi.weixin.qq.com";
+    appConfig.wechatWorkApiRelayToken = "";
+  });
+  const requests = [];
+  global.fetch = async (url, init = {}) => {
+    requests.push({ url: String(url), init });
+    const headers = new Headers(init.headers || {});
+    assert.equal(headers.get(WECHAT_WORK_API_RELAY_TOKEN_HEADER), "a".repeat(64));
+    if (String(url).includes("/cgi-bin/gettoken?")) {
+      return Response.json({ errcode: 0, access_token: "relay-access-token", expires_in: 7200 });
+    }
+    return Response.json({
+      errcode: 0,
+      errmsg: "ok",
+      has_more: 0,
+      next_cursor: "relay-cursor",
+      msg_list: [],
+    });
+  };
+
+  const result = await new WechatWorkApiClient().syncMessages({ openKfid: "wk-relay" });
+
+  assert.equal(result.next_cursor, "relay-cursor");
+  assert.equal(requests.length, 2);
+  assert.ok(requests.every((request) => request.url.startsWith("https://kefu.zhenxiliye.cn/wecom-api/cgi-bin/")));
+});
+
+test("official API relay token is never sent directly to qyapi.weixin.qq.com", async (t) => {
+  setup();
+  appConfig.wechatWorkApiRelayToken = "b".repeat(64);
+  t.after(() => {
+    appConfig.wechatWorkApiRelayToken = "";
+  });
+
+  await assert.rejects(
+    () => new WechatWorkApiClient().syncMessages({ openKfid: "wk-relay-misconfigured" }),
+    /cannot be sent directly to qyapi\.weixin\.qq\.com/,
+  );
 });
 
 test("official API client requests customer nickname and avatar with customer/batchget", async (t) => {

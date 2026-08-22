@@ -317,7 +317,11 @@ test("smart customer service design pipeline uses the bundled MCP client for rel
   const calls = [];
   const mcp = {
     enabled: () => true,
-    health: async () => ({ target: "installed_release", reachable: true }),
+    health: async () => ({
+      target: "installed_release",
+      reachable: true,
+      ai: { provider: "geeknow", label: "GeekNow", imageModel: "gpt-image-2" },
+    }),
     generateDesign: async (input) => {
       calls.push(input);
       return {
@@ -374,6 +378,11 @@ test("reference-free customer artwork uses native Zhenxi MCP once with four conc
   const calls = [];
   const mcp = {
     enabled: () => true,
+    health: async () => ({
+      target: "installed_release",
+      reachable: true,
+      ai: { provider: "geeknow", label: "GeekNow", imageModel: "gpt-image-2" },
+    }),
     generateNativeImages: async (input) => {
       calls.push(input);
       return {
@@ -417,6 +426,57 @@ test("reference-free customer artwork uses native Zhenxi MCP once with four conc
   assert.equal(outcome.images.length, 4);
   assert.equal(outcome.images[0].width, 1080);
   assert.equal(outcome.images[0].height, 1440);
+});
+
+test("durable image generation fails closed unless Zhenxi proves GeekNow is active", async (t) => {
+  const previous = {
+    adapter: appConfig.designPlatformAdapter,
+    baseUrl: appConfig.designPlatformBaseUrl,
+  };
+  Object.assign(appConfig, {
+    designPlatformAdapter: "zhenxi_external",
+    designPlatformBaseUrl: "http://127.0.0.1:31870",
+  });
+  t.after(() => Object.assign(appConfig, {
+    designPlatformAdapter: previous.adapter,
+    designPlatformBaseUrl: previous.baseUrl,
+  }));
+
+  let generationCalls = 0;
+  const client = new DesignPlatformClient({
+    enabled: () => true,
+    health: async () => ({
+      target: "installed_release",
+      reachable: true,
+      ai: { provider: "zhenzhen", label: "Zhenzhen", imageModel: "gpt-image-2" },
+    }),
+    generateNativeImages: async () => {
+      generationCalls += 1;
+      return {};
+    },
+    generateDesign: async () => {
+      generationCalls += 1;
+      return {};
+    },
+  });
+  const outcome = await client.executeDurableGeneration({
+    requestId: "geeknow-provider-guard-0001",
+    customerId: "customer_1",
+    conversationId: "conversation_1",
+    wechatAccountId: "wechat_1",
+    budget: {},
+    bundle: {},
+    assets: [],
+    designType: "zhenxi_image",
+    outputCount: 4,
+    requirements: { useRealSkuImages: false },
+    customerText: "生成一张测试海报",
+  }, "geeknow-provider-guard-0001");
+
+  assert.equal(outcome.status, "failed");
+  assert.equal(outcome.errorCode, "ZHENXI_GEEKNOW_PROVIDER_REQUIRED");
+  assert.match(outcome.errorMessage, /GeekNow is required/);
+  assert.equal(generationCalls, 0);
 });
 
 test("copy generation health-checks Zhenxi and exposes video scripts", async (t) => {

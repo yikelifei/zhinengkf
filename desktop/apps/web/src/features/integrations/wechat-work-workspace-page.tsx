@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, CircleAlert, CircleCheck, MessageSquareText, Radio, RefreshCw, Search, Settings2, UserRoundCheck, UserRoundPlus, X } from "lucide-react";
+import { CircleAlert, CircleCheck, MessageSquareText, Radio, RefreshCw, Search, Settings2, UserRoundPlus } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConversationThreadPane } from "../../components/conversation-workbench/conversation-thread-pane";
@@ -94,7 +94,7 @@ export function WechatWorkWorkspacePage({
     return <ConversationPageState title="正在连接企业微信会话" detail="权限确认后读取已由官方回调同步的真实客户消息。" />;
   }
   if (controller.accessPhase === "error") {
-    return <ConversationPageState title="企业微信工作台暂不可用" detail={controller.accessError} tone="danger" actionLabel="重新连接" onAction={() => void refreshWorkspace()} />;
+    return <ConversationPageState title="企业微信会话暂不可用" detail={controller.accessError} tone="danger" actionLabel="重新连接" onAction={() => void refreshWorkspace()} />;
   }
   if (controller.accessPhase === "denied") {
     return <ConversationPageState title="当前操作员不能查看企业微信会话" detail={controller.permissionDetail || "未授予 view_console。"} tone="warning" />;
@@ -109,7 +109,7 @@ export function WechatWorkWorkspacePage({
     <section className={styles.page} aria-labelledby="wechat-work-workspace-title">
       <header className={styles.header}>
         <div className={styles.titleRow}>
-          <h1 id="wechat-work-workspace-title">企业微信</h1>
+          <h1 id="wechat-work-workspace-title">企业微信会话</h1>
           <span className={styles.connectionStatus} data-tone={statusPresentation.tone} title={statusPresentation.detail}>
             {statusPresentation.tone === "ready"
               ? <CircleCheck size={14} aria-hidden="true" />
@@ -145,56 +145,27 @@ export function WechatWorkWorkspacePage({
       </div>
       <div className={styles.workspaceGuidance}>
         {selectedConversation ? (
-          <div className={styles.serviceBar} data-locked={selectedConversation.manualLocked ? "true" : "false"}>
+          <div className={styles.serviceBar} data-locked="false">
             <div className={styles.serviceIdentity}>
               <strong>{selectedConversation.customer?.name || selectedConversation.title || "未命名客户"}</strong>
-              <span>{selectedIdentityReady ? "客服账号、会话、客户身份已绑定" : "身份不完整，回复和接管已禁用"}</span>
-              <small>当前是微信客服咨询身份；长期客户关系仍需客户确认添加企业微信专员。</small>
+              <span>{selectedIdentityReady ? "客服账号、会话、客户身份已绑定" : "身份不完整，回复已禁用"}</span>
+              <small>智能客服默认自动处理；人工需要补充时直接在回复框输入并发送。</small>
             </div>
             <div className={styles.serviceState}>
-              <span data-tone={selectedConversation.manualLocked ? "warning" : "ready"}>
-                {selectedConversation.manualLocked ? "人工接管中 · 自动处理暂停" : "自动处理可用 · 尚未人工接管"}
-              </span>
+              <span data-tone="ready">智能客服自动回复中</span>
               <div className={styles.serviceActions}>
                 <Link href={`/conversations/${encodeURIComponent(selectedConversation.id)}`}>
                   <UserRoundPlus size={14} aria-hidden="true" />客户资料与长期服务
                 </Link>
-                <button
-                  type="button"
-                  data-action-id="wechat-work.workspace.manual-takeover"
-                  aria-label={selectedConversation.manualLocked ? "解除当前会话人工接管" : "人工接管当前会话"}
-                  data-disabled-reason={!selectedIdentityReady ? "当前会话身份不完整" : !controller.canReply ? "当前操作员没有回复权限" : undefined}
-                  onClick={controller.requestManualLockChange}
-                  disabled={!selectedIdentityReady || !controller.canReply || controller.manualLockBusy}
-                >
-                  <UserRoundCheck size={14} aria-hidden="true" />
-                  {controller.manualLockBusy ? "处理中" : selectedConversation.manualLocked ? "解除人工接管" : "人工接管"}
-                </button>
               </div>
             </div>
           </div>
         ) : (
-          <div className={styles.serviceBarEmpty}>选择一条客户会话后，可在这里核对身份并决定是否人工接管。</div>
+          <div className={styles.serviceBarEmpty}>选择一条客户会话后，可核对身份并直接回复；智能客服会默认处理客户消息。</div>
         )}
         {controller.readNotice ? <div className={styles.readNotice} role="alert">{controller.readNotice}</div> : null}
         {controller.actionError ? <div className={styles.actionNotice} data-tone="danger" role="alert">{controller.actionError}</div> : null}
         {controller.actionNotice ? <div className={styles.actionNotice} data-tone="ready" role="status">{controller.actionNotice}</div> : null}
-        {controller.manualLockTarget !== null ? (
-          <div className={styles.manualConfirmation} role="region" aria-live="polite" aria-labelledby="workspace-manual-lock-title">
-            <div>
-              <strong id="workspace-manual-lock-title"><AlertTriangle size={15} aria-hidden="true" />确认变更人工接管</strong>
-              <span>{controller.manualLockTarget
-                ? "接管后自动处理暂停，人工回复仍通过企业微信安全发送队列。"
-                : "解除后服务端可能恢复自动处理，本操作不会重发历史消息。"}</span>
-            </div>
-            <div className={styles.serviceActions}>
-              <button type="button" data-action-id="wechat-work.workspace.manual-takeover-cancel" aria-label="取消人工接管状态变更" onClick={controller.cancelManualLockChange}><X size={14} aria-hidden="true" />取消</button>
-              <button className={styles.confirmButton} type="button" data-action-id="wechat-work.workspace.manual-takeover-confirm" aria-label="确认人工接管状态变更" onClick={() => void controller.confirmManualLockChange()}>
-                <UserRoundCheck size={14} aria-hidden="true" />确认变更
-              </button>
-            </div>
-          </div>
-        ) : null}
       </div>
 
       <div className={styles.workspace}>

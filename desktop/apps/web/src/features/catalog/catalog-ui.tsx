@@ -18,6 +18,12 @@ type CatalogImageCandidate = {
   reason: "ready" | "missing" | "unsupported_type" | "unsafe_or_unimported";
 };
 
+type CatalogProductImageOptions = {
+  thumbnail?: boolean;
+  width?: number;
+  height?: number;
+};
+
 export type CatalogSkuImageSummary = {
   refs: string[];
   renderableRefs: string[];
@@ -53,6 +59,75 @@ export function money(value: number) {
   return Number.isFinite(value) ? `¥${value.toLocaleString("zh-CN", { maximumFractionDigits: 2 })}` : "-";
 }
 
+export function formatSkuDimensions(value?: unknown) {
+  if (!value) return "未填写";
+  if (typeof value === "string") return value.trim() || "未填写";
+  if (typeof value !== "object" || Array.isArray(value)) return "未填写";
+  const record = value as Record<string, unknown>;
+  const length = dimensionValue(record, ["lengthCm", "length", "l", "长"]);
+  const width = dimensionValue(record, ["widthCm", "width", "w", "宽"]);
+  const height = dimensionValue(record, ["heightCm", "height", "h", "高"]);
+  if (length && width && height) return `${length} x ${width} x ${height} cm`;
+  const parts = [
+    length ? `长 ${length} cm` : "",
+    width ? `宽 ${width} cm` : "",
+    height ? `高 ${height} cm` : "",
+    dimensionValue(record, ["diameterCm", "diameter", "直径"]) ? `直径 ${dimensionValue(record, ["diameterCm", "diameter", "直径"])} cm` : "",
+  ].filter(Boolean);
+  return parts.length ? parts.join(" / ") : "未填写";
+}
+
+export function formatSkuWeight(value?: unknown) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return "未填写";
+  return `${numeric.toLocaleString("zh-CN", { maximumFractionDigits: 1 })} g`;
+}
+
+export type CatalogImportFacts = {
+  rawPrice?: string;
+  rawNote?: string;
+  originalDimensions?: string;
+  imageId?: string;
+  sourceMedia?: string;
+  sourceSheet?: string;
+  sourceCell?: string;
+  imageStatus?: string;
+  supplyStatus?: string;
+  priceStatus?: string;
+  initialReviewStatus?: string;
+  issues?: string[];
+};
+
+export function catalogImportFacts(matchingRules?: Record<string, unknown> | null): CatalogImportFacts | null {
+  const candidate = matchingRules?.catalogImport;
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
+  const record = candidate as Record<string, unknown>;
+  const facts: CatalogImportFacts = {
+    rawPrice: textValue(record.rawPrice),
+    rawNote: textValue(record.rawNote),
+    originalDimensions: textValue(record.originalDimensions),
+    imageId: textValue(record.imageId),
+    sourceMedia: textValue(record.sourceMedia),
+    sourceSheet: textValue(record.sourceSheet),
+    sourceCell: textValue(record.sourceCell),
+    imageStatus: textValue(record.imageStatus),
+    supplyStatus: textValue(record.supplyStatus),
+    priceStatus: textValue(record.priceStatus),
+    initialReviewStatus: textValue(record.initialReviewStatus),
+    issues: Array.isArray(record.issues)
+      ? record.issues.map(textValue).filter((item): item is string => Boolean(item))
+      : textValue(record.issues)?.split(/[;；]/).map((item) => item.trim()).filter(Boolean),
+  };
+  return Object.values(facts).some((value) => Array.isArray(value) ? value.length > 0 : Boolean(value)) ? facts : null;
+}
+
+export function catalogImportLocation(facts?: CatalogImportFacts | null) {
+  const sheet = facts?.sourceSheet?.trim();
+  const cell = facts?.sourceCell?.trim();
+  if (sheet && cell) return `${sheet} / ${cell}`;
+  return sheet || cell || "未记录";
+}
+
 export function catalogSkuImageRefs(value?: CatalogImageRecord | null) {
   const record = value || {};
   const refs: string[] = [];
@@ -73,7 +148,7 @@ export function catalogSkuRenderableImageRefs(value?: CatalogImageRecord | null)
 
 export function catalogSkuImageSummary(value?: CatalogImageRecord | null): CatalogSkuImageSummary {
   const refs = catalogSkuImageRefs(value);
-  const candidates = refs.map(catalogProductImageCandidate);
+  const candidates = refs.map((reference) => catalogProductImageCandidate(reference));
   const renderableRefs = candidates.filter((candidate) => candidate.src).map((candidate) => candidate.raw);
   const readyCount = renderableRefs.length;
   const invalidCount = candidates.filter((candidate) => candidate.status === "invalid").length;
@@ -90,8 +165,8 @@ export function catalogSkuImageSummary(value?: CatalogImageRecord | null): Catal
   };
 }
 
-export function catalogProductImageSrc(reference?: string) {
-  return catalogProductImageCandidate(reference).src;
+export function catalogProductImageSrc(reference?: string, options: CatalogProductImageOptions = {}) {
+  return catalogProductImageCandidate(reference, options).src;
 }
 
 export function CatalogProductImage({
@@ -106,7 +181,8 @@ export function CatalogProductImage({
   variant?: "tile" | "hero" | "mini";
 }) {
   const [imageState, setImageState] = useState<"idle" | "loading" | "loaded" | "failed">("idle");
-  const candidates = (reference?.trim() ? [reference.trim()] : catalogSkuImageRefs(sku)).map(catalogProductImageCandidate);
+  const imageOptions = imageOptionsForVariant(variant);
+  const candidates = (reference?.trim() ? [reference.trim()] : catalogSkuImageRefs(sku)).map((item) => catalogProductImageCandidate(item, imageOptions));
   const selectedCandidate = candidates.find((candidate) => candidate.src) || candidates[0] || catalogProductImageCandidate("");
   const src = selectedCandidate.src;
   const raw = selectedCandidate.raw;
@@ -115,6 +191,7 @@ export function CatalogProductImage({
   const loaded = imageState === "loaded";
   const runtimeState = failed ? "failed" : src ? (loaded ? "ready" : "loading") : selectedCandidate.status;
   const variantClass = variant === "hero" ? styles.productImageHero : variant === "mini" ? styles.productImageMini : styles.productImageTile;
+  const intrinsicSize = intrinsicImageSize(variant);
 
   useEffect(() => {
     setImageState(src ? "loading" : "idle");
@@ -135,7 +212,10 @@ export function CatalogProductImage({
           className={loaded ? undefined : styles.productImageLoading}
           src={src}
           alt={caption}
-          loading={variant === "mini" ? "lazy" : "eager"}
+          loading={variant === "hero" ? "eager" : "lazy"}
+          decoding="async"
+          width={intrinsicSize.width}
+          height={intrinsicSize.height}
           onLoad={() => setImageState("loaded")}
           onError={() => setImageState("failed")}
         />
@@ -150,10 +230,10 @@ export function CatalogProductImage({
   );
 }
 
-function catalogProductImageCandidate(reference?: string): CatalogImageCandidate {
+function catalogProductImageCandidate(reference?: string, options: CatalogProductImageOptions = {}): CatalogImageCandidate {
   const raw = String(reference || "").trim();
   if (!raw) return { raw: "", src: "", status: "missing", reason: "missing" };
-  const local = localAssetUrl(raw);
+  const local = localAssetUrl(raw, {}, options);
   const src = safeRenderableImageSrc(local || raw);
   if (src) return { raw, src, status: "ready", reason: "ready" };
   const unsupported = /\.[a-z0-9]+(?:[?#].*)?$/i.test(raw) && !/\.(?:png|jpe?g|webp|gif|bmp|svg|avif)(?:[?#].*)?$/i.test(raw);
@@ -178,4 +258,36 @@ function catalogProductImageStateText(candidate: CatalogImageCandidate, failed: 
   if (candidate.reason === "unsupported_type") return "图片格式不支持";
   if (candidate.reason === "unsafe_or_unimported") return "图片需要导入本地资产库后预览";
   return "图片正在读取";
+}
+
+function imageOptionsForVariant(variant: "tile" | "hero" | "mini"): CatalogProductImageOptions {
+  if (variant === "hero") return {};
+  if (variant === "mini") return { thumbnail: true, width: 128, height: 128 };
+  return { thumbnail: true, width: 360, height: 270 };
+}
+
+function intrinsicImageSize(variant: "tile" | "hero" | "mini") {
+  if (variant === "hero") return { width: 640, height: 512 };
+  if (variant === "mini") return { width: 128, height: 128 };
+  return { width: 360, height: 270 };
+}
+
+function dimensionValue(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) return value.toLocaleString("zh-CN", { maximumFractionDigits: 1 });
+    if (typeof value === "string") {
+      const text = value.trim();
+      if (!text) continue;
+      const numeric = Number(text);
+      if (Number.isFinite(numeric) && numeric <= 0) continue;
+      return text;
+    }
+  }
+  return "";
+}
+
+function textValue(value: unknown) {
+  const text = String(value ?? "").trim();
+  return text || undefined;
 }

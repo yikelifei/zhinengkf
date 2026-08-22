@@ -34,7 +34,7 @@ export function PersonalWechatControlPage() {
     >
       {error ? <FeatureNotice tone="error" title="个人微信账号状态读取失败">{error}</FeatureNotice> : null}
       <FeatureNotice tone="info" title="账号控制写操作未启用">
-        当前没有可信的账号隔离或人工接管写 API，因此本页不显示无效开关；发送继续由服务端身份和窗口校验兜底。
+        当前没有可信的账号隔离或人工补充写 API，因此本页不显示无效开关；发送继续由服务端身份和窗口校验兜底。
       </FeatureNotice>
       {busy && !registry ? <LoadingState label="正在读取个人微信账号状态" /> : null}
       {!busy && registry && !registry.instances.length ? (

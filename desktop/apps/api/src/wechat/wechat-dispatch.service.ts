@@ -31,6 +31,7 @@ import {
 import { rules } from "../shared/rules";
 import {
   prepareWechatWorkImageFile,
+  resolveWechatWorkImageFile,
   resolveWechatWorkMaterialFile,
 } from "../wechat-work/wechat-work-media";
 import { maxWechatWorkInboundMediaBytes } from "../wechat-work/wechat-work-inbound-media";
@@ -82,14 +83,190 @@ function latestConversationSalesContext(routes: any[], now = Date.now()) {
     if (!Number.isFinite(createdAt) || now - createdAt > CONVERSATION_BUDGET_CONTEXT_MAX_AGE_MS) return false;
     if (!["pre_sales", "gift_design"].includes(String(item?.agentKey || ""))) return false;
     const salesContext = item?.salesContext || item?.replyDraft?.salesContext || {};
-    return Boolean(String(salesContext.usageScene || salesContext.stylePreference || "").trim() || extractSalesUsageScene(item?.text));
+    return Boolean(
+      String(salesContext.usageScene || salesContext.stylePreference || salesContext.customerCategory || "").trim()
+      || extractSalesUsageScene(item?.text),
+    );
   });
   if (!route) return null;
   const salesContext = route?.salesContext || route?.replyDraft?.salesContext || {};
   return {
     usageScene: String(salesContext.usageScene || extractSalesUsageScene(route?.text) || "").trim() || null,
     stylePreference: String(salesContext.stylePreference || "").trim() || null,
+    customerCategory: String(salesContext.customerCategory || "").trim() || null,
   };
+}
+
+function latestConversationCustomerSelectionMaterial(routes: any[], now = Date.now()) {
+  for (const route of Array.isArray(routes) ? routes : []) {
+    const createdAt = Date.parse(String(route?.createdAt || ""));
+    if (Number.isFinite(createdAt) && now - createdAt > CONVERSATION_BUDGET_CONTEXT_MAX_AGE_MS) continue;
+    const selection = route?.replyDraft?.customerSelectionPages?.materialSelection
+      || route?.replyDraft?.customerSelectionMaterial;
+    if (selection?.status !== "matched" || !String(selection?.material?.id || "").trim()) continue;
+    return {
+      ...selection,
+      material: { ...selection.material },
+    };
+  }
+  return null;
+}
+
+function latestConversationCustomerSelectionPages(routes: any[], now = Date.now()) {
+  for (const route of Array.isArray(routes) ? routes : []) {
+    const createdAt = Date.parse(String(route?.createdAt || ""));
+    if (Number.isFinite(createdAt) && now - createdAt > CONVERSATION_BUDGET_CONTEXT_MAX_AGE_MS) continue;
+    const quote = route?.replyDraft?.customerSelectionPageQuote;
+    if (quote?.requested && quote?.material?.id && Array.isArray(quote?.pages) && quote.pages.length) {
+      return {
+        status: "matched",
+        requested: true,
+        material: { ...quote.material },
+        pages: quote.pages.slice(0, 3).map((page: any) => ({ ...page })),
+      };
+    }
+    const recommendation = route?.replyDraft?.customerSelectionPages;
+    if (recommendation?.status !== "matched" || !recommendation?.material?.id || !Array.isArray(recommendation?.pages) || !recommendation.pages.length) continue;
+    return {
+      ...recommendation,
+      material: { ...recommendation.material },
+      pages: recommendation.pages.slice(0, 3).map((page: any) => ({ ...page })),
+    };
+  }
+  return null;
+}
+
+async function prepareCustomerSelectionDelivery(route: any) {
+  const pageRecommendation = route?.replyDraft?.customerSelectionPages;
+  if (pageRecommendation?.requested) {
+    if (pageRecommendation.status !== "matched") return { kind: "text_only", pageRecommendation };
+    const requestedPages = Array.isArray(pageRecommendation.pages)
+      ? pageRecommendation.pages.slice(0, 3)
+      : [];
+    if (!requestedPages.length) return { kind: "text_only", pageRecommendation };
+    try {
+      const preparedImages = await Promise.all(requestedPages.map((page: any) => (
+        prepareWechatWorkImageFile(page?.imageStorageRelativePath)
+      )));
+      const pageProofs = requestedPages.map((page: any) => ({
+        materialId: String(page?.materialId || ""),
+        pageNumber: Number(page?.pageNumber || 0),
+        imageSha256: String(page?.imageSha256 || "").toLowerCase(),
+      }));
+      const registered = rules.validateCustomerSelectionPageProofs({
+        sourceImagePaths: preparedImages.map((image) => image.sourcePath),
+        proofs: pageProofs,
+      });
+      if (!registered?.ok) throw new Error(registered?.reason || "customer selection page proof failed");
+      if (preparedImages.some((image, index) => image.fingerprint !== pageProofs[index].imageSha256)) {
+        throw new Error("customer selection page fingerprint changed after index generation");
+      }
+      return {
+        kind: "material_page_images",
+        pageRecommendation,
+        preparedImages,
+        pageProofs,
+        pageNumbers: requestedPages.map((page: any) => Number(page?.pageNumber || 0)).filter((value: number) => value > 0),
+      };
+    } catch (error) {
+      return {
+        kind: "text_only",
+        pageRecommendation,
+        preparationFailed: true,
+        errorMessage: error instanceof Error ? error.message : "customer selection page preparation failed",
+      };
+    }
+  }
+
+  const materialSelection = route?.replyDraft?.customerSelectionMaterial;
+  if (materialSelection?.status !== "matched" || !materialSelection?.material?.storageRelativePath) return null;
+  try {
+    return {
+      kind: "customer_selection_material",
+      materialSelection,
+      materialFile: resolveWechatWorkMaterialFile(materialSelection.material.storageRelativePath),
+    };
+  } catch (error) {
+    return {
+      kind: "text_only",
+      materialSelection,
+      preparationFailed: true,
+      errorMessage: error instanceof Error ? error.message : "customer selection material preparation failed",
+    };
+  }
+}
+
+function buildCustomerSelectionSendPayload(replyText: string, delivery: any, metadata: Record<string, unknown>) {
+  const text = delivery?.preparationFailed
+    ? "我已经按您的需求定位好资料，但文件读取时出现异常。为避免发错或发不完整，我先转人工补发。"
+    : replyText;
+  if (delivery?.kind === "material_page_images") {
+    return {
+      kind: "material_page_recommendations",
+      textBeforeImages: text,
+      sourceImagePaths: delivery.preparedImages.map((image: any) => image.sourcePath),
+      imagePaths: delivery.preparedImages.map((image: any) => image.filePath),
+      customerSelectionMaterialId: delivery.pageRecommendation?.material?.id || null,
+      customerSelectionPageNumbers: delivery.pageNumbers,
+      customerSelectionPageProofs: delivery.pageProofs,
+      ...metadata,
+    };
+  }
+  if (delivery?.kind === "customer_selection_material") {
+    return {
+      kind: "customer_selection_material",
+      textBeforeFiles: text,
+      filePaths: [delivery.materialFile.filePath],
+      customerSelectionMaterialId: delivery.materialSelection?.material?.id || null,
+      ...metadata,
+    };
+  }
+  return {
+    kind: "text",
+    text,
+    ...metadata,
+  };
+}
+
+function validateCustomerSelectionPageDeliveryIntegrity(task: any) {
+  const payload = task?.payload || {};
+  if (payload.kind !== "material_page_recommendations") return { ok: true, applicable: false };
+  const sourceImagePaths: string[] = Array.isArray(payload.sourceImagePaths) ? payload.sourceImagePaths.map(String) : [];
+  const imagePaths: string[] = Array.isArray(payload.imagePaths) ? payload.imagePaths.map(String) : [];
+  const pageProofs = Array.isArray(payload.customerSelectionPageProofs) ? payload.customerSelectionPageProofs : [];
+  const registered = rules.validateCustomerSelectionPageProofs({ sourceImagePaths, proofs: pageProofs });
+  if (!registered?.ok) return { ok: false, applicable: true, reason: registered?.reason || "page proof failed" };
+  if (imagePaths.length !== sourceImagePaths.length) {
+    return { ok: false, applicable: true, reason: "customer selection source and send image counts differ" };
+  }
+  const optimization = Array.isArray(task?.guardSnapshot?.imageOptimization)
+    ? task.guardSnapshot.imageOptimization
+    : [];
+  try {
+    sourceImagePaths.forEach((sourcePath: string, index: number) => {
+      const source = resolveWechatWorkImageFile(sourcePath);
+      const sourceFingerprint = createHash("sha256").update(fs.readFileSync(source.filePath)).digest("hex");
+      if (sourceFingerprint !== String(pageProofs[index]?.imageSha256 || "").toLowerCase()) {
+        throw new Error("customer selection source page fingerprint changed");
+      }
+      const send = resolveWechatWorkImageFile(imagePaths[index]);
+      if (path.resolve(send.filePath) === path.resolve(source.filePath)) return;
+      const proof = optimization[index];
+      const sendFingerprint = createHash("sha256").update(fs.readFileSync(send.filePath)).digest("hex");
+      if (
+        proof?.optimized !== true
+        || Number(proof?.position) !== index + 1
+        || path.resolve(String(proof?.sourcePath || "")) !== path.resolve(source.filePath)
+        || path.resolve(String(proof?.sendPath || "")) !== path.resolve(send.filePath)
+        || String(proof?.fingerprint || "").toLowerCase() !== sendFingerprint
+      ) {
+        throw new Error("customer selection optimized page proof is invalid");
+      }
+    });
+  } catch (error) {
+    return { ok: false, applicable: true, reason: error instanceof Error ? error.message : "page integrity failed" };
+  }
+  return { ok: true, applicable: true, reason: "approved customer selection pages verified" };
 }
 
 function latestPendingCustomerToolPlan(routes: any[], now = Date.now()) {
@@ -1704,6 +1881,8 @@ export class WechatDispatchService {
         knowledgeEntries,
         catalogSkus,
         bundleRecommendation,
+        customerSelectionMaterialContext: latestConversationCustomerSelectionMaterial(recentRoutes),
+        customerSelectionPageContext: latestConversationCustomerSelectionPages(recentRoutes),
         previousReplies: recentRoutes.slice(0, 6).map((route: any) => route?.suggestedReply),
       });
       const governedRouteBase = enforceMediaUnderstandingPolicy(
@@ -1721,6 +1900,7 @@ export class WechatDispatchService {
       draft,
       customerText: payload.text || "",
       currentMessageId: message.id,
+      toolPlan: zhenxiRequest,
     });
     const route = this.localStore.createRouteEvaluation(
         {
@@ -1811,6 +1991,7 @@ export class WechatDispatchService {
       message,
       route,
       plan,
+      agentTask: null,
       sendTask: null,
       designJob: null,
       notification: null,
@@ -1838,6 +2019,11 @@ export class WechatDispatchService {
     }
 
     await this.withInboundEffectLease(inboundOperation.id, claimToken, async () => {
+      result.agentTask = await this.persistence.createAgentTask({
+        ...(plan.agentTask || {}),
+        id: plan.agentTask?.id,
+        operationKey: inboundOperation.id,
+      });
       if (plan.shouldCreateDesignJob) {
         result.designJobs = customerToolDesignRequests(plan.zhenxiRequest).map((designRequest: any) =>
           this.createDesignDraftFromInbound({
@@ -1853,17 +2039,18 @@ export class WechatDispatchService {
       }
 
       if (plan.shouldQueueReply) {
+        const customerSelectionDelivery = await prepareCustomerSelectionDelivery(route);
+        const replyText = buildInboundReplyText(route, plan);
         result.sendTask = this.createLocalSendTask({
           operationKey: stableOperationKey("inbound-reply", `${message.id}:auto-reply`),
           wechatAccountId: conversation.wechatAccountId,
           conversationId: conversation.id,
           customerId: conversation.customerId,
           designJobId: result.designJob?.id,
-          payload: {
-            kind: "text",
-            text: buildInboundReplyText(route, plan),
+          payload: buildCustomerSelectionSendPayload(replyText, customerSelectionDelivery, {
             routeId: route.id,
             inboundMessageId: message.id,
+            agentTaskId: result.agentTask?.id || null,
             automationPlan: plan.type,
             routingPolicy: plan.routingPolicy || route.routingPolicy || null,
             replyDraftSource: zhenxiRequest && !zhenxiRequestUsesCatalog(zhenxiRequest)
@@ -1871,14 +2058,50 @@ export class WechatDispatchService {
               : route.replyDraft?.source || null,
             catalogDataReadiness: zhenxiRequestUsesCatalog(zhenxiRequest) ? route.replyDraft?.catalogDataReadiness || null : null,
             catalogReferencedSkuCodes: zhenxiRequestUsesCatalog(zhenxiRequest) ? catalogReferencedSkuCodes(route.replyDraft) : [],
-          },
+          }),
           guardSnapshot: {
             requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
-            policy: "single-account-serial-queue",
+            policy: "immediate-identity-bound-dispatch",
             reason: `inbound-${plan.reason}`,
             automation: buildInboundReplyAutomationMetadata(message, route, plan),
+            ...(customerSelectionDelivery ? {
+              customerSelectionDelivery: {
+                kind: customerSelectionDelivery.kind,
+                materialId: customerSelectionDelivery.pageRecommendation?.material?.id
+                  || customerSelectionDelivery.materialSelection?.material?.id
+                  || null,
+                pageNumbers: customerSelectionDelivery.pageNumbers || [],
+                preparationFailed: customerSelectionDelivery.preparationFailed === true,
+              },
+              ...(customerSelectionDelivery.kind === "material_page_images" ? {
+                imageOptimization: (customerSelectionDelivery.preparedImages || []).map((image: any, index: number) => ({
+                  position: index + 1,
+                  optimized: image.optimized,
+                  sourcePath: image.sourcePath,
+                  sendPath: image.filePath,
+                  sourceSize: image.sourceSize,
+                  sendSize: image.size,
+                  fingerprint: image.fingerprint,
+                })),
+              } : {}),
+            } : {}),
           },
         });
+        if (customerSelectionDelivery?.preparationFailed && !result.notification) {
+          result.notification = await this.notifications.create(
+            "warning",
+            "客户选款资料需要人工补发",
+            `${conversation.title}：已定位图册或推荐页，但本地文件读取失败，自动发送已降级为文字提醒。`,
+            {
+              wechatAccountId: conversation.wechatAccountId,
+              conversationId: conversation.id,
+              customerId: conversation.customerId,
+              routeId: route.id,
+              reason: "customer_selection_delivery_preparation_failed",
+              effectKey: `${inboundOperation.id}:customer-selection-delivery-failed`,
+            },
+          );
+        }
       }
     });
 
@@ -1926,6 +2149,7 @@ export class WechatDispatchService {
   }
 
   private async completeInboundProcessing(operationId: string, claimToken: string, result: any) {
+    result = await this.ensureNoInterceptInboundReplyTask(result);
     const manualLock = result?.manualLock
       ? {
           conversationId: durableEntityId(result.manualLock?.conversation, "manual-lock conversation"),
@@ -1958,6 +2182,94 @@ export class WechatDispatchService {
     });
     await this.persistence.completeInboundOperation(operationId, claimToken, durableResult);
     return result;
+  }
+
+  private async ensureNoInterceptInboundReplyTask(result: any) {
+    if (result?.sendTask || result?.duplicate || !result?.message || !result?.route) return result;
+
+    const message = result.message;
+    const route = result.route;
+    const wechatAccountId = String(message.wechatAccountId || route.wechatAccountId || "").trim();
+    const conversationId = String(message.conversationId || route.conversationId || "").trim();
+    const customerId = String(message.customerId || route.customerId || "").trim();
+    if (!wechatAccountId || !conversationId || !customerId) {
+      throw new BadRequestException("no-intercept inbound acknowledgement requires complete customer identity");
+    }
+
+    const originalPlan = isPlainObject(result.plan) ? result.plan : {};
+    const originalRoutingPolicy = isPlainObject(originalPlan.routingPolicy)
+      ? originalPlan.routingPolicy
+      : isPlainObject(route.routingPolicy)
+        ? route.routingPolicy
+        : {};
+    const routingPolicy = {
+      ...originalRoutingPolicy,
+      lane: "immediate_acknowledgement",
+      handler: "agent",
+      manualRequired: false,
+      canAskClarification: true,
+      canQueueAutoReply: true,
+      autoSendAllowed: true,
+      reason: "客户消息不得被业务流程拦截，先发送安全确认。",
+      nextStep: "send_identity_bound_acknowledgement_immediately",
+      safeguards: [
+        ...new Set([
+          ...(Array.isArray((originalRoutingPolicy as any).safeguards)
+            ? (originalRoutingPolicy as any).safeguards.map((item: unknown) => String(item || "")).filter(Boolean)
+            : []),
+          "wechat_send_guard_required",
+          "acknowledgement_only",
+          "never_silent_inbound",
+        ]),
+      ],
+    };
+    const plan = {
+      ...originalPlan,
+      type: String(originalPlan.type || "immediate_acknowledgement"),
+      reason: String(originalPlan.reason || "no_intercept_inbound_acknowledgement"),
+      shouldQueueReply: true,
+      acknowledgementOnly: true,
+      noInterceptFallback: true,
+      originalShouldQueueReply: originalPlan.shouldQueueReply === true,
+      routingPolicy,
+    };
+    const taskInput = {
+      operationKey: stableOperationKey("inbound-reply", `${message.id}:auto-reply`),
+      wechatAccountId,
+      conversationId,
+      customerId,
+      payload: {
+        kind: "text",
+        text: buildNoInterceptAcknowledgementText(),
+        routeId: route.id,
+        inboundMessageId: message.id,
+        automationPlan: "immediate_acknowledgement",
+        routingPolicy,
+        replyDraftSource: "never_silent_acknowledgement",
+        catalogDataReadiness: null,
+        catalogReferencedSkuCodes: [],
+      },
+      guardSnapshot: {
+        status: "pending",
+        checks: [],
+        requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
+        policy: "immediate-identity-bound-dispatch",
+        reason: `inbound-${plan.reason}:never-silent-acknowledgement`,
+        automation: buildInboundReplyAutomationMetadata(message, route, plan),
+      },
+    };
+
+    const sendTask = appConfig.useLocalStore
+      ? this.createLocalSendTask(taskInput)
+      : await (async () => {
+          const binding = await this.assertSendTaskBinding({ wechatAccountId, conversationId, customerId });
+          return this.persistence.createSendTask({
+            ...taskInput,
+            guardSnapshot: { ...taskInput.guardSnapshot, binding },
+          });
+        })();
+
+    return { ...result, plan, sendTask };
   }
 
   private async resumeLocalCommittedInbound(operation: any, claimToken: string) {
@@ -2097,7 +2409,17 @@ export class WechatDispatchService {
     draft: any;
     customerText: string;
     currentMessageId?: string;
+    toolPlan?: any;
   }): Promise<AiAssistedInboundDraft | null> {
+    if (input.toolPlan?.kind === "status" && String(input.toolPlan?.replyText || "").trim()) {
+      return {
+        used: false,
+        text: String(input.toolPlan.replyText).trim(),
+        reason: String(input.toolPlan.reason || "verified_design_job_status"),
+        historyTurns: 0,
+        authority: "verified_design_job_status",
+      };
+    }
     const safeModelActions = new Set(["auto_agent", "collect_info"]);
     if (
       !this.aiProviders
@@ -2124,20 +2446,24 @@ export class WechatDispatchService {
         authority: "reviewed_human_verbatim",
       };
     }
+    let conversationHistory: Array<{ role: "customer" | "assistant"; content: string }> | null = null;
     if (isDeterministicSceneClarification(input.route, input.draft)) {
-      return {
-        used: false,
-        text: String(input.draft.suggestedReply || "").trim(),
-        reason: "deterministic_scene_clarification",
-        historyTurns: 0,
-        authority: "deterministic_scene_clarification",
-      };
+      conversationHistory = await this.buildAiConversationHistory(input.conversation, input.currentMessageId);
+      if (conversationHistory.length === 0) {
+        return {
+          used: false,
+          text: String(input.draft.suggestedReply || "").trim(),
+          reason: "deterministic_scene_clarification",
+          historyTurns: 0,
+          authority: "deterministic_scene_clarification",
+        };
+      }
     }
     const conversationalFallbackAuthority = xiaoshiConversationalFallbackAuthority(input.route, input.draft);
     const conversationalFastPath = Boolean(conversationalFallbackAuthority);
     const startedAt = Date.now();
     try {
-      const conversationHistory = await this.buildAiConversationHistory(input.conversation, input.currentMessageId);
+      conversationHistory ||= await this.buildAiConversationHistory(input.conversation, input.currentMessageId);
       const suggestionRequest: AiSuggestionInput = {
         customerMessage: input.customerText,
         ruleSuggestion: input.draft.suggestedReply,
@@ -2152,16 +2478,16 @@ export class WechatDispatchService {
         requiredTerms: requiredAiReplyTerms(input.route, input.draft),
         requireNaturalRewrite: true,
         styleProfile: input.draft.replyDraft?.styleProfile,
+        routingHint: "economy" as const,
+        latencyBudgetMs: CONVERSATIONAL_REPLY_BUDGET_MS,
+        allowRepair: false,
         ...(conversationalFastPath ? {
-          routingHint: "economy" as const,
-          latencyBudgetMs: CONVERSATIONAL_REPLY_BUDGET_MS,
-          allowRepair: false,
           dialoguePlan: buildXiaoshiDialoguePlan(input.route, input.draft),
         } : {}),
       };
       const result = await withConversationalReplyBudget(
         this.aiProviders.generateInboundSuggestion(suggestionRequest),
-        conversationalFastPath ? CONVERSATIONAL_REPLY_BUDGET_MS + 150 : null,
+        CONVERSATIONAL_REPLY_BUDGET_MS + 150,
       );
       const businessGuard = validateAiBusinessReply(result.text, input.route, input.draft);
       const conversationGuard = conversationalFastPath
@@ -2568,6 +2894,8 @@ export class WechatDispatchService {
       knowledgeEntries,
       catalogSkus,
       bundleRecommendation,
+      customerSelectionMaterialContext: latestConversationCustomerSelectionMaterial(priorRoutes),
+      customerSelectionPageContext: latestConversationCustomerSelectionPages(priorRoutes),
       previousReplies: priorRoutes.slice(0, 6).map((route: any) => route?.suggestedReply),
     });
     const governedRouteBase = enforceMediaUnderstandingPolicy(
@@ -2586,6 +2914,7 @@ export class WechatDispatchService {
       draft,
       customerText: payload.text || "",
       currentMessageId: message.id,
+      toolPlan: zhenxiRequest,
     });
     const route = await this.createPrismaInboundRouteEvaluationOnce(inboundOperation.id, claimToken, {
         channel: conversation.channel || "wechat",
@@ -2678,10 +3007,16 @@ export class WechatDispatchService {
       }),
     }), route, Boolean(this.aiProviders));
     let sendTask: any = null;
+    let agentTask: any = null;
     let designJob: any = null;
     let designJobs: any[] = [];
     let notification: any = null;
     await this.withInboundEffectLease(inboundOperation.id, claimToken, async () => {
+      agentTask = await this.persistence.createAgentTask({
+        ...(plan.agentTask || {}),
+        id: plan.agentTask?.id,
+        operationKey: inboundOperation.id,
+      });
       if (plan.shouldCreateDesignJob) {
         for (const designRequest of customerToolDesignRequests(plan.zhenxiRequest)) {
           designJobs.push(await this.createPrismaDesignDraftFromInbound({
@@ -2699,6 +3034,8 @@ export class WechatDispatchService {
         designJob = designJobs[0] || null;
       }
       if (plan.shouldQueueReply) {
+        const customerSelectionDelivery = await prepareCustomerSelectionDelivery(route);
+        const replyText = buildInboundReplyText(route, plan);
         const sendBinding = await this.assertSendTaskBinding({
           wechatAccountId: conversation.wechatAccountId,
           conversationId: conversation.id,
@@ -2710,11 +3047,10 @@ export class WechatDispatchService {
           conversationId: conversation.id,
           customerId: conversation.customerId,
           designJobId: designJob?.id,
-          payload: {
-            kind: "text",
-            text: buildInboundReplyText(route, plan),
+          payload: buildCustomerSelectionSendPayload(replyText, customerSelectionDelivery, {
             routeId: route.id,
             inboundMessageId: message.id,
+            agentTaskId: agentTask?.id || null,
             automationPlan: plan.type,
             routingPolicy: plan.routingPolicy || route.routingPolicy || null,
             replyDraftSource: zhenxiRequest && !zhenxiRequestUsesCatalog(zhenxiRequest)
@@ -2722,19 +3058,55 @@ export class WechatDispatchService {
               : route.replyDraft?.source || null,
             catalogDataReadiness: zhenxiRequestUsesCatalog(zhenxiRequest) ? route.replyDraft?.catalogDataReadiness || null : null,
             catalogReferencedSkuCodes: zhenxiRequestUsesCatalog(zhenxiRequest) ? catalogReferencedSkuCodes(route.replyDraft) : [],
-          },
+          }),
           guardSnapshot: {
             status: "pending",
             checks: [],
             requiredChecks: ["wechatAccount", "activeChatTitle", "recentMessageOrCustomerId"],
-            policy: "single-account-serial-queue",
+            policy: "immediate-identity-bound-dispatch",
             reason: `inbound-${plan.reason}`,
             binding: sendBinding,
             automation: buildInboundReplyAutomationMetadata(message, route, plan),
+            ...(customerSelectionDelivery ? {
+              customerSelectionDelivery: {
+                kind: customerSelectionDelivery.kind,
+                materialId: customerSelectionDelivery.pageRecommendation?.material?.id
+                  || customerSelectionDelivery.materialSelection?.material?.id
+                  || null,
+                pageNumbers: customerSelectionDelivery.pageNumbers || [],
+                preparationFailed: customerSelectionDelivery.preparationFailed === true,
+              },
+              ...(customerSelectionDelivery.kind === "material_page_images" ? {
+                imageOptimization: (customerSelectionDelivery.preparedImages || []).map((image: any, index: number) => ({
+                  position: index + 1,
+                  optimized: image.optimized,
+                  sourcePath: image.sourcePath,
+                  sendPath: image.filePath,
+                  sourceSize: image.sourceSize,
+                  sendSize: image.size,
+                  fingerprint: image.fingerprint,
+                })),
+              } : {}),
+            } : {}),
           },
         });
+        if (customerSelectionDelivery?.preparationFailed && !notification) {
+          notification = await this.notifications.create(
+            "warning",
+            "客户选款资料需要人工补发",
+            `${conversation.title || conversation.id}：已定位图册或推荐页，但本地文件读取失败，自动发送已降级为文字提醒。`,
+            {
+              wechatAccountId: conversation.wechatAccountId,
+              conversationId: conversation.id,
+              customerId: conversation.customerId,
+              routeId: route.id,
+              reason: "customer_selection_delivery_preparation_failed",
+              effectKey: `${inboundOperation.id}:customer-selection-delivery-failed`,
+            },
+          );
+        }
       }
-      if (plan.shouldNotifyHuman) {
+      if (plan.shouldNotifyHuman && !notification) {
         notification = await this.notifications.create(
           "warning",
           "智能客服已先回复，人工可补充",
@@ -2754,6 +3126,7 @@ export class WechatDispatchService {
       message,
       route,
       plan,
+      agentTask,
       sendTask,
       designJob,
       designJobs,
@@ -2894,6 +3267,7 @@ export class WechatDispatchService {
       };
     }
     if (this.hasInboundPaymentProof(params.payload)) return null;
+    if (params.route?.replyDraft?.customerSelectionPageQuote?.requested) return null;
     const identity = {
       wechatAccountId: String(params.conversation?.wechatAccountId || "").trim(),
       conversationId: String(params.conversation?.id || "").trim(),
@@ -4538,6 +4912,12 @@ export class WechatDispatchService {
     customerToolOnly?: boolean;
   } & IdentityFilter = {}) {
     if (!appConfig.useLocalStore) return this.processPrismaSafeSendQueue(params);
+    const selectedAdapter = typeof (this.sendAdapter as any)?.describe === "function"
+      ? (this.sendAdapter as any).describe(params.adapter)
+      : null;
+    const requiresAccountSerialization = selectedAdapter
+      ? selectedAdapter.capabilities?.requiresWindowGuard === true
+      : false;
     const limit = Math.max(1, Math.min(Number(params.limit || 20), 100));
     const perAccountLimit = Math.max(1, Math.min(Number(params.perAccountLimit || limit), limit));
     const queued = roundRobinSendTasksByAccount(
@@ -4621,7 +5001,7 @@ export class WechatDispatchService {
 
       const accountId = String(freshTask.wechatAccountId || "");
       const attemptedForAccount = attemptedPerAccount.get(accountId) || 0;
-      if (attemptedForAccount >= perAccountLimit) {
+      if (requiresAccountSerialization && attemptedForAccount >= perAccountLimit) {
         const advice = buildSendQueueSkipAdvice({
           reason: "account_cycle_limit_reached",
           task: freshTask,
@@ -4637,8 +5017,10 @@ export class WechatDispatchService {
         continue;
       }
 
-      const accountQueueHeadId = this.localStore.listAccountQueueTaskIds(freshTask.wechatAccountId)[0];
-      if (accountQueueHeadId !== freshTask.id) {
+      const accountQueueHeadId = requiresAccountSerialization
+        ? this.localStore.listAccountQueueTaskIds(freshTask.wechatAccountId)[0]
+        : freshTask.id;
+      if (requiresAccountSerialization && accountQueueHeadId !== freshTask.id) {
         const queueHeadTask = accountQueueHeadId ? this.localStore.getSendTask(accountQueueHeadId) : null;
         const advice = buildSendQueueSkipAdvice({
           reason: "not_account_queue_head",
@@ -4668,7 +5050,7 @@ export class WechatDispatchService {
       }
 
       try {
-        attemptedPerAccount.set(accountId, attemptedForAccount + 1);
+        if (requiresAccountSerialization) attemptedPerAccount.set(accountId, attemptedForAccount + 1);
         const result = await this.executeQueuedSend(freshTask.id, { adapter: params.adapter });
         if (result.task.status === "blocked") blocked.push(result);
         else if (result.task.status === "failed" || result.retryScheduled) failed.push(result);
@@ -4882,6 +5264,12 @@ export class WechatDispatchService {
   ) {
     const limit = Math.max(1, Math.min(Number(params.limit || 20), 100));
     const perAccountLimit = Math.max(1, Math.min(Number(params.perAccountLimit || limit), limit));
+    const selectedAdapter = typeof (this.sendAdapter as any)?.describe === "function"
+      ? (this.sendAdapter as any).describe(params.adapter)
+      : null;
+    const requiresAccountSerialization = selectedAdapter
+      ? selectedAdapter.capabilities?.requiresWindowGuard === true
+      : false;
     const queued = roundRobinSendTasksByAccount(
       (await this.persistence.listSendTasks(params))
         .filter((task: any) => task.status === "queued")
@@ -4937,7 +5325,7 @@ export class WechatDispatchService {
       }
       const accountId = String(freshTask.wechatAccountId || "");
       const attemptedForAccount = attemptedPerAccount.get(accountId) || 0;
-      if (attemptedForAccount >= perAccountLimit) {
+      if (requiresAccountSerialization && attemptedForAccount >= perAccountLimit) {
         skipped.push({
           sendTaskId: freshTask.id,
           reason: "account_cycle_limit_reached",
@@ -4945,13 +5333,15 @@ export class WechatDispatchService {
         });
         continue;
       }
-      const queueHeadId = (await this.persistence.listAccountQueueTaskIds(freshTask.wechatAccountId))[0];
-      if (queueHeadId !== freshTask.id) {
+      const queueHeadId = requiresAccountSerialization
+        ? (await this.persistence.listAccountQueueTaskIds(freshTask.wechatAccountId))[0]
+        : freshTask.id;
+      if (requiresAccountSerialization && queueHeadId !== freshTask.id) {
         skipped.push({ sendTaskId: freshTask.id, reason: "not_account_queue_head", queueHeadId: queueHeadId || null });
         continue;
       }
       try {
-        attemptedPerAccount.set(accountId, attemptedForAccount + 1);
+        if (requiresAccountSerialization) attemptedPerAccount.set(accountId, attemptedForAccount + 1);
         const result = await this.executeQueuedSend(freshTask.id, { adapter: params.adapter });
         if (result.task.status === "blocked") blocked.push(result);
         else processed.push(result);
@@ -5104,6 +5494,12 @@ export class WechatDispatchService {
   }
 
   validateSendTask(id: string, expected: ExpectedIdentityPayload = {}) {
+    if (!appConfig.useLocalStore) {
+      const adapter = this.sendAdapter.describe();
+      if (!adapter.capabilities.requiresWindowGuard) {
+        return this.validatePrismaWechatWorkKfSendTask(id, expected);
+      }
+    }
     return this.validateSendTaskWithCurrentWindow(id, expected);
   }
 
@@ -5236,11 +5632,6 @@ export class WechatDispatchService {
     assertExpectedIdentity(task, params, "send task");
     if (!isManualReplySendTask(task)) {
       throw new BadRequestException("only a trusted manual reply can be sent directly from the conversation page");
-    }
-    const accountTasks = await this.persistence.listSendTasks({ wechatAccountId: task.wechatAccountId });
-    const inFlight = accountTasks.find((item: any) => item.status === "sending" && item.id !== task.id);
-    if (inFlight) {
-      throw new BadRequestException(`another send is still in flight for this WeChat account: ${inFlight.id}`);
     }
     const options = { allowManualPriority: true };
     if (!appConfig.useLocalStore) {
@@ -5410,7 +5801,7 @@ export class WechatDispatchService {
         startedAt,
       },
       claimGuard: {
-        requireAccountQueueHead: true,
+        requireAccountQueueHead: adapter.capabilities.requiresWindowGuard && !options.allowManualPriority,
         wechatAccountId: String(validated.wechatAccountId || ""),
         conversationId: String(validated.conversationId || ""),
         customerId: String(validated.customerId || validated.conversation?.customerId || ""),
@@ -6081,12 +6472,30 @@ export class WechatDispatchService {
     if (!initialLinkedState.ok) {
       throw new BadRequestException(`send task production state invalid: ${initialLinkedState.message}`);
     }
-    const binding = validateSendTaskBinding({
+    const taskBinding = validateSendTaskBinding({
       task: taskBeforeValidation,
       conversation: taskBeforeValidation.conversation,
       designJob: taskBeforeValidation.designJob,
       quoteDraft: taskBeforeValidation.quoteDraft,
     });
+    const pageIntegrity = validateCustomerSelectionPageDeliveryIntegrity(taskBeforeValidation);
+    const binding = !taskBinding.ok
+      ? {
+          ...taskBinding,
+          customerSelectionPageIntegrity: pageIntegrity.applicable ? pageIntegrity : undefined,
+        }
+      : !pageIntegrity.ok
+        ? {
+            ...taskBinding,
+            ok: false,
+            status: "blocked",
+            reason: `customer selection page integrity invalid: ${pageIntegrity.reason}`,
+            customerSelectionPageIntegrity: pageIntegrity,
+          }
+        : {
+            ...taskBinding,
+            customerSelectionPageIntegrity: pageIntegrity.applicable ? pageIntegrity : undefined,
+          };
     if (!binding.ok) {
       const now = new Date().toISOString();
       const task = await this.persistence.updateSendTask(id, {
@@ -6155,7 +6564,7 @@ export class WechatDispatchService {
         startedAt,
       },
       claimGuard: {
-        requireAccountQueueHead: true,
+        requireAccountQueueHead: adapter.capabilities.requiresWindowGuard && !options.allowManualPriority,
         wechatAccountId: String(validated.wechatAccountId || ""),
         conversationId: String(validated.conversationId || ""),
         customerId: String(validated.customerId || validated.conversation?.customerId || ""),
@@ -7856,6 +8265,7 @@ export class WechatDispatchService {
     const job = this.findLatestSelectableDesignJob(params.conversation);
     const candidates = job ? [...(job.images || [])].sort((a: any, b: any) => Number(a.position || 0) - Number(b.position || 0)) : [];
     if (this.hasInboundPaymentProof(params.payload)) return null;
+    if (params.route?.replyDraft?.customerSelectionPageQuote?.requested) return null;
     const selectionPlan = planCustomerImageSelection({
       ...this.buildInboundSelectionInput(params.payload),
       candidates,
@@ -10580,6 +10990,10 @@ function buildHandledServiceActionPlan(action: Record<string, unknown>) {
   };
 }
 
+function buildNoInterceptAcknowledgementText() {
+  return "收到您的消息，我正在为您处理；涉及价格、付款、交期或方案确认的内容，核对后会在这里回复您。";
+}
+
 function sanitizeInboundMediaUnderstanding(value: unknown) {
   if (!isPlainObject(value)) return null;
   const status = String(value.status || "").trim();
@@ -11199,6 +11613,9 @@ function buildInboundReplyAutomationMetadata(message: any, route: any, plan: any
     routeId: String(route?.id || ""),
     internalTestOverride: plan?.internalTestOverride === true,
     acknowledgementOnly: plan?.acknowledgementOnly === true,
+    agentTaskId: String(plan?.agentTask?.id || ""),
+    agentTaskStatus: String(plan?.agentTask?.status || ""),
+    agentTask: plan?.agentTask || null,
   };
 }
 
@@ -11347,9 +11764,8 @@ function conversationalReplyFailureReason(error: unknown) {
 function enforceAiPolishedReplyPlan(plan: any, route: any, aiProviderInjected: boolean) {
   if (!plan?.shouldQueueReply || !aiProviderInjected) return plan;
   if (plan.acknowledgementOnly === true) return plan;
-  // The exact employee-test allowlist is intentionally allowed to send the
-  // low-risk clarification fallback even when AI polishing is unavailable.
-  // External customers remain fail-closed below.
+  // A customer must still receive the already-governed deterministic reply
+  // when conversational polishing is unavailable or exceeds its latency budget.
   if (plan.internalTestOverride === true) return plan;
   if (plan.reason === "low_risk_generic_followup" && plan.deterministicReply === true) return plan;
   if (plan.zhenxiRequest) return plan;
@@ -11367,11 +11783,9 @@ function enforceAiPolishedReplyPlan(plan: any, route: any, aiProviderInjected: b
   const aiReason = String(route?.replyDraft?.aiAssistance?.reason || "ai_polish_unavailable").trim();
   return {
     ...plan,
-    type: "ai_polish_blocked",
-    reason: `ai_polish_required:${aiReason}`,
-    shouldQueueReply: false,
-    shouldNotifyHuman: true,
-    aiPolishRequired: true,
+    shouldQueueReply: true,
+    aiFallbackUsed: true,
+    aiFallbackReason: aiReason,
     originalPlan: {
       type: plan.type,
       reason: plan.reason,

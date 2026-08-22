@@ -113,6 +113,51 @@ test("vision router sends bounded image data through an explicitly capable model
   assert.equal(capturedBody.messages[0].content[1].image_url.detail, "low");
 });
 
+test("vision router excludes text-only DeepSeek even when it is listed first", async () => {
+  const deepseek = {
+    ...provider("deepseek"),
+    baseUrl: "https://deepseek.invalid",
+    model: "deepseek-v4-flash",
+    visionEnabled: false,
+    visionModel: "",
+    transcriptionModel: "",
+  };
+  const qwenVision = {
+    ...provider("dashscope"),
+    baseUrl: "https://dashscope.invalid/compatible-mode/v1",
+  };
+  const mixedRuntime = {
+    ...runtime(qwenVision),
+    primary: "deepseek",
+    fallbackChain: ["dashscope"],
+    providers: [deepseek, qwenVision],
+    multimodal: {
+      ...runtime(qwenVision).multimodal,
+      visionChain: ["deepseek", "dashscope"],
+    },
+  };
+  const calls = [];
+  const router = new OpenAiCompatibleRouter(mixedRuntime, {
+    fetchImpl: async (url) => {
+      calls.push(String(url));
+      return new Response(JSON.stringify({ choices: [{ message: { content: "图片里是咖色礼盒" } }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+
+  const result = await router.completeVision({
+    images: [{ bytes: VALID_PNG, mimeType: "image/png" }],
+    prompt: "只提取可见事实",
+  });
+
+  assert.equal(result.provider, "dashscope");
+  assert.equal(calls.length, 1);
+  assert.match(calls[0], /dashscope\.invalid/);
+  assert.equal(calls.some((url) => /deepseek\.invalid/.test(url)), false);
+});
+
 test("transcription router uses multipart audio/transcriptions without putting the key in the body", async () => {
   let captured;
   const router = new OpenAiCompatibleRouter(runtime(), {
@@ -195,6 +240,35 @@ test("image understanding enriches the customer message and reuses its durable c
   assert.equal(first.attachments[0].reviewRequired, false);
   assert.equal(replay.understanding.cacheHit, true);
   assert.equal(visionCalls, 1);
+});
+
+test("image understanding asks the vision model for the material outline instead of the screenshot ratio", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-card-outline-understanding-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  appConfig.localStorageRoot = root;
+  const stored = await storeWechatWorkInboundImage({
+    msgid: "card-outline-understanding",
+    mediaId: "card-outline-media",
+    media: { bytes: VALID_PNG, size: VALID_PNG.length, contentType: "image/png" },
+  });
+  let receivedPrompt = "";
+  const service = new WechatWorkInboundUnderstandingService({
+    async understandImages(input) {
+      receivedPrompt = input.prompt;
+      return { text: "物料类型为贺卡；贺卡外轮廓：正方形（1:1）", provider: "stub-vision", model: "vision-fast", attempts: 1 };
+    },
+  });
+
+  const result = await service.enrich({
+    msgtype: "image",
+    text: "[图片]",
+    attachments: [{ msgtype: "image", status: "ready", localPath: stored.localPath, fingerprint: stored.fingerprint }],
+  });
+
+  assert.match(receivedPrompt, /贺卡外轮廓：正方形（1:1）/);
+  assert.match(receivedPrompt, /不要把整张截图/);
+  assert.match(result.text, /贺卡外轮廓：正方形（1:1）/);
+  assert.equal(result.understanding.version, 2);
 });
 
 test("voice is normalized with ffmpeg and transcribed into the customer turn", async (t) => {

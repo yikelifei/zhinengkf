@@ -19,28 +19,27 @@
 从项目根目录双击：
 
 ```bat
-run_desktop.bat
+启动智能客服.cmd
 ```
 
-启动器会先检查 Node.js、npm、端口占用和日志目录。第一次运行时，如果 `desktop/node_modules` 不存在，会自动安装依赖。
+启动器会停止旧的受管服务，重置为默认本地开发模式，启动 `3100/3200/3700`，然后打开桌面窗口。默认模式使用本地模拟设计平台，不依赖真实出图服务。
 
 启动后访问：
 
-- 客服工作台：`http://127.0.0.1:3100/`
+- 客服工作台：`http://127.0.0.1:3100/overview`
 - API 健康检查：`http://127.0.0.1:3200/api/health`
 - 模拟设计平台：`http://127.0.0.1:3700/v1/health`
 
-停止端口：
+停止服务：
 
 ```bat
-stop_desktop.bat
+停止智能客服.cmd
 ```
 
 查看状态：
 
 ```bat
-cd desktop
-npm.cmd run ports:status
+检查智能客服.cmd
 ```
 
 ## 开发命令
@@ -390,6 +389,8 @@ POST /api/design-jobs/auto-process-low-value
 - 执行当前适配器：`POST /api/wechat/send-tasks/:id/execute`
 - 企业微信只读状态：`GET /api/wechat-work/status`
 - 企业微信脱敏审计：`GET /api/wechat-work/kf/audit?limit=100`
+
+桌面公网 IP 不固定时，正式链路必须启用服务器固定出口：桌面的所有企业微信官方 API 请求经 `WECHAT_WORK_API_BASE_URL=https://kefu.zhenxiliye.cn/wecom-api` 转发，并用独立 `WECHAT_WORK_API_RELAY_TOKEN` 鉴权；生产回调 API 设置 `WECHAT_WORK_CALLBACK_PROCESSING_MODE=signal_only`，避免服务器和桌面重复调用 `sync_msg`。部署和验收步骤见 `docs/WECHAT_WORK_DESKTOP_REALTIME_BRIDGE.md`。
 
 旧的直通标记接口 `POST /api/wechat/send-tasks/:id/mark-sent` 和 `POST /api/wechat/send-tasks/:id/mark-sent-current-window` 已禁用。它们不会再把任务直接改成 `sent`；所有发送完成状态都必须来自企业微信发送结果、企业微信回调审计或受控人工终态处置。
 

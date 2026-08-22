@@ -1,6 +1,8 @@
 import { Module } from "@nestjs/common";
 import { AiProviderController } from "./ai/ai-provider.controller";
 import { AiProviderService } from "./ai/ai-provider.service";
+import { AgentTasksController } from "./agent-tasks/agent-tasks.controller";
+import { AgentTaskToolExecutorService } from "./agent-tasks/agent-task-tool-executor.service";
 import { AgentsController } from "./agents/agents.controller";
 import { AgentSkillExecutorService } from "./agents/agent-skill-executor.service";
 import { AgentsService } from "./agents/agents.service";
@@ -14,6 +16,8 @@ import { CatalogController } from "./catalog/catalog.controller";
 import { CatalogService } from "./catalog/catalog.service";
 import { ConversationOperationsController } from "./conversation-ops/conversation-operations.controller";
 import { ConversationOperationsService } from "./conversation-ops/conversation-operations.service";
+import { CompanyProfileController } from "./company-profile.controller";
+import { DesktopShellController } from "./desktop-shell/desktop-shell.controller";
 import { DesignJobsController } from "./design-jobs/design-jobs.controller";
 import { DesignJobsService } from "./design-jobs/design-jobs.service";
 import { DesignPlatformExecutionService } from "./design-jobs/design-platform-execution.service";
@@ -53,16 +57,20 @@ import { WechatWorkInboundUnderstandingService } from "./wechat-work/wechat-work
 import { WechatWorkSuiteApiClient } from "./wechat-work/wechat-work-suite-api.client";
 import { WechatWorkCallbackEventClientService } from "./wechat-work/wechat-work-callback-event-client.service";
 import { WechatWorkCallbackEventRelay } from "./wechat-work/wechat-work-callback-events";
+import { WechatPersistence } from "./wechat/wechat-persistence";
 
 @Module({
   controllers: [
     AiProviderController,
+    AgentTasksController,
     AgentsController,
     AutomationController,
     AssetsController,
     HealthController,
     CatalogController,
+    CompanyProfileController,
     ConversationOperationsController,
+    DesktopShellController,
     DeliveryReadinessController,
     DesignJobsController,
     DesignPlatformController,
@@ -79,6 +87,7 @@ import { WechatWorkCallbackEventRelay } from "./wechat-work/wechat-work-callback
   ],
   providers: [
     AiProviderService,
+    AgentTaskToolExecutorService,
     AgentSkillExecutorService,
     AgentsService,
     AutomationService,
@@ -113,6 +122,7 @@ import { WechatWorkCallbackEventRelay } from "./wechat-work/wechat-work-callback
     StorageService,
     TrainingService,
     WechatDispatchService,
+    WechatPersistence,
     WechatSendAdapterService,
     WechatWorkApiClient,
     WechatWorkAuthorizationService,

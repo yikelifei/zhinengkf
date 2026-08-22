@@ -251,6 +251,31 @@ test("LocalStore bulk import also preserves existing inactive status and drafts 
   }
 });
 
+test("catalog audit exposes staged inactive SKUs without counting them as automation-ready", async () => {
+  const previous = appConfig.useLocalStore;
+  appConfig.useLocalStore = true;
+  let includeInactiveSeen = false;
+  try {
+    const localStore = {
+      listSkus(options) {
+        includeInactiveSeen = options?.includeInactive === true;
+        return [skuPayload({ isActive: false, mainImagePath: undefined })];
+      },
+      listSkuChangeLogs() { return []; },
+    };
+    const service = new CatalogService({}, localStore, {});
+    const result = await service.auditSkus();
+    assert.equal(includeInactiveSeen, true);
+    assert.equal(result.total, 1);
+    assert.equal(result.activeCount, 0);
+    assert.equal(result.inactiveCount, 1);
+    assert.equal(result.stagedCount, 1);
+    assert.equal(result.readyCount, 0);
+  } finally {
+    appConfig.useLocalStore = previous;
+  }
+});
+
 test("catalog audit migration retains history by restricting SKU deletion", () => {
   const fs = require("node:fs");
   const path = require("node:path");

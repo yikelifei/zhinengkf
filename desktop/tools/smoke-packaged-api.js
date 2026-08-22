@@ -35,6 +35,7 @@ const webPort = Number(process.env.PACKAGED_WEB_SMOKE_PORT || 32190);
 const apiHealthUrl = `http://127.0.0.1:${apiPort}/api/health`;
 const overviewUrl = `http://127.0.0.1:${webPort}/overview`;
 const proxyHealthUrl = `http://127.0.0.1:${webPort}/api/health`;
+const companyProfileUrl = `http://127.0.0.1:${apiPort}/api/company-profile`;
 const MAX_CAPTURE_BYTES = 256 * 1024;
 const MAX_HTTP_BODY_BYTES = 16 * 1024 * 1024;
 const HTTP_REQUEST_DEADLINE_MS = 10_000;
@@ -58,6 +59,7 @@ async function main() {
     path.join(readOnlyRoot, "node_modules", "sharp", "dist", "index.cjs"),
     path.join(readOnlyRoot, "node_modules", "@img", "sharp-win32-x64", "lib", "sharp-win32-x64-0.35.3.node"),
     path.join(resourcesDir, "services", "api", "shared", "image-fingerprint.js"),
+    path.join(resourcesDir, "company", "company-profile.json"),
   ];
   for (const required of requiredFiles) {
     if (!fs.existsSync(required)) throw new Error(`packaged full-stack smoke input missing: ${required}`);
@@ -84,6 +86,7 @@ async function main() {
       path.join(resourcesDir, "app.asar.unpacked", "node_modules"),
     ].join(path.delimiter),
     SMART_KEFU_RUNTIME_TARGET: "desktop",
+    SMART_KEFU_COMPANY_PROFILE_FILE: path.join(resourcesDir, "company", "company-profile.json"),
     LOW_VALUE_AUTOMATION_MODE: "interval",
     LOW_VALUE_AUTOMATION_RUN_ON_START: "false",
     LOW_VALUE_AUTOMATION_PROCESS_SEND_QUEUE: "false",
@@ -106,6 +109,17 @@ async function main() {
     );
     if (apiHealth.statusCode !== 200) {
       throw new Error(`packaged API health returned ${apiHealth.statusCode}, expected 200`);
+    }
+    const companyProfileResponse = await requestUrl(companyProfileUrl);
+    const companyProfile = parseJsonBuffer(companyProfileResponse.body);
+    if (
+      companyProfileResponse.statusCode !== 200
+      || companyProfile?.organization?.displayName !== "臻希礼业"
+      || companyProfile?.wechatWork?.accountDisplayName !== "禮想礼品"
+      || companyProfile?.workspace?.ownership !== "company"
+      || companyProfile?.runtimeBinding?.credentialsEmbedded !== false
+    ) {
+      throw new Error(`packaged company profile was not bound safely (${companyProfileResponse.statusCode})`);
     }
 
     const web = spawnService("web", webEntry, path.dirname(webEntry), {
@@ -145,6 +159,7 @@ async function main() {
     writeReport({
       status: "PASS",
       apiHealth: { statusCode: apiHealth.statusCode, mode: "launch_bound_api_hmac" },
+      companyProfile: { statusCode: companyProfileResponse.statusCode, organization: companyProfile.organization.displayName },
       overview: { statusCode: overview.statusCode },
       proxyHealth: { statusCode: proxyHealth.statusCode, mode: "external_no_cookie_fail_closed" },
       authenticatedProxyHealth: { statusCode: authenticatedProxyHealth.statusCode, mode: "launch_bound_web_api_hmac" },

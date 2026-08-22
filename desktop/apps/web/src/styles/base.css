@@ -15,15 +15,18 @@
 
 html {
   min-width: 320px;
+  height: 100%;
   min-height: 100%;
+  overflow: hidden;
   background: var(--wk-color-surface-subtle);
 }
 
 body {
   min-width: 320px;
-  min-height: 100vh;
+  height: 100%;
+  min-height: 100%;
   margin: 0;
-  overflow-x: hidden;
+  overflow: hidden;
   background: var(--wk-color-surface-subtle);
   color: var(--wk-color-text);
   font-family: var(--wk-font-family);

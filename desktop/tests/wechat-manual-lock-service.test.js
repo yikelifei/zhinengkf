@@ -85,7 +85,7 @@ test("wechat manual review copy stays readable Chinese", () => {
   assert.match(source, /订单确认已进入微信安全发送队列/);
 });
 
-test("employee testing queues and processes a safe reply for low-risk ambiguous inbound messages", async () => {
+test("low-risk unmatched inbound queues and processes a safe clarification", async () => {
   const previous = appConfig.wechatInternalTestAutoReplyEnabled;
   const previousWechatAccountIds = appConfig.wechatInternalTestAutoReplyWechatAccountIds;
   const previousConversationIds = appConfig.wechatInternalTestAutoReplyConversationIds;
@@ -103,13 +103,13 @@ test("employee testing queues and processes a safe reply for low-risk ambiguous 
       text: "天梯奖",
     });
 
-    assert.equal(result.route.action, "manual_review");
-    assert.equal(result.plan.reason, "internal_test_safe_reply");
+    assert.equal(result.route.action, "collect_info");
+    assert.equal(result.plan.reason, "scene_clarification_required");
     assert.equal(result.plan.shouldQueueReply, true);
     assert.equal(result.sendTask.status, "queued");
     assert.equal(result.sendTask.guardSnapshot.automation.source, "inbound_message");
     assert.equal(result.sendTask.guardSnapshot.automation.valueLevel, "low");
-    assert.equal(result.sendTask.guardSnapshot.automation.internalTestOverride, true);
+    assert.equal(result.sendTask.guardSnapshot.automation.internalTestOverride, false);
     assert.match(result.sendTask.payload.text, /确认|补充/);
 
     createPassingWechatWindowSnapshot(localStore, "天梯奖");
@@ -132,7 +132,7 @@ test("employee testing queues and processes a safe reply for low-risk ambiguous 
   }
 });
 
-test("employee testing keeps its safe reply when AI polishing is unavailable", async () => {
+test("safe scene clarification does not depend on AI polishing", async () => {
   const previousUseLocalStore = appConfig.useLocalStore;
   const previous = appConfig.wechatInternalTestAutoReplyEnabled;
   const previousWechatAccountIds = appConfig.wechatInternalTestAutoReplyWechatAccountIds;
@@ -161,9 +161,9 @@ test("employee testing keeps its safe reply when AI polishing is unavailable", a
     });
 
     assert.equal(aiCalls, 0, "an unmatched low-risk test message should use the safe clarification reply");
-    assert.equal(result.route.action, "manual_review");
-    assert.equal(result.plan.reason, "internal_test_safe_reply");
-    assert.equal(result.plan.internalTestOverride, true);
+    assert.equal(result.route.action, "collect_info");
+    assert.equal(result.plan.reason, "scene_clarification_required");
+    assert.notEqual(result.plan.internalTestOverride, true);
     assert.equal(result.plan.shouldQueueReply, true);
     assert.equal(result.plan.shouldNotifyHuman, false);
     assert.equal(result.sendTask.status, "queued");
@@ -181,7 +181,7 @@ test("employee testing keeps its safe reply when AI polishing is unavailable", a
   }
 });
 
-test("employee testing auto reply stays disabled outside the exact identity allowlist", async () => {
+test("safe scene clarification works outside the employee allowlist", async () => {
   const previous = appConfig.wechatInternalTestAutoReplyEnabled;
   const previousWechatAccountIds = appConfig.wechatInternalTestAutoReplyWechatAccountIds;
   const previousConversationIds = appConfig.wechatInternalTestAutoReplyConversationIds;
@@ -191,7 +191,7 @@ test("employee testing auto reply stays disabled outside the exact identity allo
   appConfig.wechatInternalTestAutoReplyConversationIds = ["conversation_other"];
   appConfig.wechatInternalTestAutoReplyCustomerIds = ["customer_other"];
   try {
-    const { service } = setupService();
+    const { localStore, service } = setupService();
     const result = await service.processInboundMessage({
       externalId: "employee-test-outside-allowlist-1",
       wechatAccountId: "wechat_demo_1",
@@ -199,10 +199,11 @@ test("employee testing auto reply stays disabled outside the exact identity allo
       text: "天梯奖",
     });
 
-    assert.equal(result.route.action, "manual_review");
-    assert.equal(result.plan.reason, "routing_policy_manual_review");
-    assert.equal(result.plan.shouldQueueReply, false);
-    assert.equal(result.sendTask, null);
+    assert.equal(result.route.action, "collect_info");
+    assert.equal(result.plan.reason, "scene_clarification_required");
+    assert.equal(result.plan.shouldQueueReply, true);
+    assert.equal(result.sendTask.status, "queued");
+    assert.equal(localStore.listConversations().find((item) => item.id === "conversation_demo_1").manualLocked, false);
   } finally {
     appConfig.wechatInternalTestAutoReplyEnabled = previous;
     appConfig.wechatInternalTestAutoReplyWechatAccountIds = previousWechatAccountIds;

@@ -22,6 +22,7 @@ export function WechatWorkCustomerEntryJourney({
   copyEntry: () => void;
   downloadQrCode: () => void;
 }) {
+  const upgradeMemberLabels = formatUpgradeMemberLabels(upgrade);
   return (
     <>
       {entry ? (
@@ -34,7 +35,7 @@ export function WechatWorkCustomerEntryJourney({
             </strong>
             <p>
               {hasInboundEvidence
-                ? "官方来信证据已出现。进入工作台核对客户身份、真实消息和人工接管状态。"
+                ? "官方来信证据已出现。进入工作台核对客户身份、真实消息和人工补充状态。"
                 : "生成二维码只代表入口可用，不代表消息链路已打通；客户发言后，再到工作台确认会话已入库。"}
             </p>
           </div>
@@ -81,7 +82,7 @@ export function WechatWorkCustomerEntryJourney({
             <UserRoundPlus size={22} aria-hidden="true" />
           </div>
           <ol className={styles.customerFlow}>
-            <li><span>1</span><div><strong>客户扫码咨询</strong><small>发送第一句话后，自动进入“会话管理”。</small></div></li>
+            <li><span>1</span><div><strong>客户扫码咨询</strong><small>发送第一句话后，自动进入“企业微信会话”。</small></div></li>
             <li><span>2</span><div><strong>智能客服接待</strong><small>保存客户身份、会话和后续业务资料。</small></div></li>
             <li><span>3</span><div><strong>升级长期服务</strong><small>在<Link href="/integrations/wechat-work/workspace">会话工作台</Link>进入完整处理页，发送企业微信专员推荐。</small></div></li>
             <li><span>4</span><div><strong>客户确认添加</strong><small>客户添加成功后，才能长期主动跟进。</small></div></li>
@@ -91,11 +92,25 @@ export function WechatWorkCustomerEntryJourney({
             <div>
               <strong>{upgradeError ? "需要开通企业微信升级服务" : upgrade?.ready ? "升级服务专员已配置" : "还没有配置升级服务专员"}</strong>
               <p>{upgradeError || upgrade?.detail || "正在读取企业微信升级服务配置。"}</p>
-              {upgrade?.memberUserIds.length ? <small>可用专员：{upgrade.memberUserIds.join("、")}</small> : null}
+              {upgradeMemberLabels.length ? <small>可用专员：{upgradeMemberLabels.join("、")}</small> : null}
             </div>
           </div>
         </section>
       </div>
     </>
   );
+}
+
+function formatUpgradeMemberLabels(upgrade: WechatWorkUpgradeServiceConfig | null) {
+  if (!upgrade?.memberUserIds.length) return [];
+  const optionsByUserId = new Map(
+    (Array.isArray(upgrade.memberOptions) ? upgrade.memberOptions : [])
+      .filter((option) => option?.userId)
+      .map((option) => [option.userId, option] as const),
+  );
+  return upgrade.memberUserIds.map((userId) => {
+    const option = optionsByUserId.get(userId);
+    const displayName = String(option?.displayName || "").trim();
+    return displayName && displayName !== userId ? `${displayName}（${userId}）` : userId;
+  });
 }

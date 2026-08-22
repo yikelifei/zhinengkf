@@ -12,6 +12,7 @@ const runtimeDir = process.env.DESKTOP_RUNTIME_DIR
   : path.join(root, ".runtime-stable");
 const logFile = path.join(runtimeDir, "stable-app-launch.log");
 const lockFile = path.join(runtimeDir, "stable-app-launch.pid");
+const electronStatusFile = path.join(runtimeDir, "electron-default.status.json");
 let lockOwned = false;
 
 main().catch((error) => {
@@ -42,7 +43,18 @@ async function main() {
     throw new Error(`desktop services are not ready; inspect ${logFile}`);
   }
 
-  const electron = run(process.execPath, [path.join(root, "tools", "launch-stable-electron.js")], "launch Electron");
+  const powershell = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const electron = run(powershell, [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-WindowStyle",
+    "Hidden",
+    "-File",
+    path.join(root, "tools", "launch-stable-electron-visible.ps1"),
+    "-WebUrl",
+    process.env.WEB_URL || "http://127.0.0.1:3100/overview",
+  ], "launch Electron", { captureOutput: false });
   if (electron.status !== 0) throw new Error(`Electron launcher failed exit=${electron.status}`);
   append("launch completed");
 }
@@ -55,6 +67,7 @@ function runDoctor(waitMs, label) {
       "--wait",
       `--wait-ms=${waitMs}`,
       "--interval-ms=1000",
+      "--allow-design-unavailable",
     ],
     label,
   );
@@ -64,8 +77,9 @@ function runCmd(scriptPath, scriptArgs, label) {
   return run(process.env.ComSpec || "cmd.exe", ["/d", "/c", scriptPath, ...scriptArgs], label);
 }
 
-function run(command, commandArgs, label) {
+function run(command, commandArgs, label, options = {}) {
   append(`${label} started`);
+  const captureOutput = options.captureOutput !== false;
   const result = spawnSync(command, commandArgs, {
     cwd: root,
     env: {
@@ -73,7 +87,7 @@ function run(command, commandArgs, label) {
       DESKTOP_ROOT: root,
       DESKTOP_RUNTIME_DIR: runtimeDir,
     },
-    encoding: "utf8",
+    ...(captureOutput ? { encoding: "utf8" } : { stdio: "ignore" }),
     windowsHide: true,
     maxBuffer: 8 * 1024 * 1024,
   });
@@ -106,15 +120,33 @@ function acquireLaunchLock() {
       if (error?.code !== "EEXIST") throw error;
       const existingPid = readLockPid();
       const ageMs = fileAgeMs(lockFile);
-      if ((existingPid > 0 && isPidAlive(existingPid) && ageMs < 300000) || (!existingPid && ageMs < 5000)) {
+      const readyWindowAllowsRecovery = desktopWindowHeartbeatFresh() && ageMs >= 5000;
+      if ((existingPid > 0 && isPidAlive(existingPid) && ageMs < 300000 && !readyWindowAllowsRecovery) || (!existingPid && ageMs < 5000)) {
         append(`duplicate launch skipped existingPid=${existingPid || "initializing"} ageMs=${Math.round(ageMs)}`);
         return false;
       }
       fs.rmSync(lockFile, { force: true });
-      append(`removed stale launch lock pid=${existingPid || "unknown"} ageMs=${Math.round(ageMs)}`);
+      append(`removed stale launch lock pid=${existingPid || "unknown"} ageMs=${Math.round(ageMs)} readyWindow=${readyWindowAllowsRecovery}`);
     }
   }
   throw new Error(`could not acquire desktop launch lock: ${lockFile}`);
+}
+
+function desktopWindowHeartbeatFresh() {
+  try {
+    const status = JSON.parse(fs.readFileSync(electronStatusFile, "utf8"));
+    const pid = Number(status?.pid);
+    const updatedAt = Date.parse(String(status?.updatedAt || ""));
+    return Boolean(status?.visible)
+      && Number.isInteger(pid)
+      && pid > 0
+      && isPidAlive(pid)
+      && Number.isFinite(updatedAt)
+      && Date.now() - updatedAt >= 0
+      && Date.now() - updatedAt < 5000;
+  } catch {
+    return false;
+  }
 }
 
 function releaseLaunchLock() {

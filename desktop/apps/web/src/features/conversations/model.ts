@@ -13,7 +13,7 @@ import type {
   AiProviderStatus,
   IdentityExpectation,
 } from "../../lib/api";
-import { identityExpectation, localAssetByIdUrl } from "../../lib/api";
+import { identityExpectation, localAssetByIdUrl, localConversationAttachmentUrl } from "../../lib/api";
 
 export type ConversationListFilters = {
   search: string;
@@ -118,14 +118,12 @@ export function toWorkbenchConversation(
   const unassigned = operations?.assignmentState === "unassigned";
   const stateLabel = overdue
     ? "SLA 超时"
-    : conversation.manualLocked
-      ? "人工接管"
-      : unassigned
-        ? "待分配"
-        : operations?.assignee || lifecycleLabel(operations?.status) || "未配置";
+    : unassigned
+      ? "待分配"
+      : operations?.assignee || lifecycleLabel(operations?.status) || "未配置";
   const stateTone: ConversationWorkbenchTone = overdue
     ? "danger"
-    : conversation.manualLocked || unassigned
+    : unassigned
       ? "warning"
       : operations
         ? "success"
@@ -200,17 +198,14 @@ export function toWorkbenchThread(input: {
       onlineLabel: conversation.wechatAccount ? (conversation.wechatAccount.isActive ? "在线" : "离线") : "状态待核验",
       online: Boolean(conversation.wechatAccount?.isActive),
     },
-    serviceStatusLabel: conversation.manualLocked ? "人工服务中" : "自动处理可用",
-    serviceStatusTone: conversation.manualLocked ? "warning" : "success",
-    manualTakeoverLabel: conversation.manualLocked ? "已人工接管" : undefined,
+    serviceStatusLabel: "智能客服自动处理",
+    serviceStatusTone: "success",
+    manualTakeoverLabel: undefined,
     safetyNotice: "企业微信回复会先进入后端安全发送队列；最终发送结果以官方客服通道回执和服务端状态为准。",
     timelineLabel: "完整会话记录",
     messages: input.timeline.map((item) => toWorkbenchMessage(item, title, conversation.customer?.avatarUrl, attachmentIdentity)),
     incidents: [],
     notices: [
-      ...(conversation.manualLocked
-        ? [{ id: "manual-lock", tone: "warning" as const, text: "当前会话已由人工接管", detail: "自动处理暂停；人工回复将通过企业微信安全发送队列处理。" }]
-        : []),
       ...permissionNotice,
     ],
     suggestion: {
@@ -427,21 +422,40 @@ function toWorkbenchMessage(
       alt: item.direction === "inbound" ? "客户头像" : "客服头像",
     },
     text: item.text,
+    content: item.messageType && item.content && typeof item.content === "object"
+      ? { type: item.messageType, ...item.content }
+      : undefined,
     createdAtLabel: formatDateTime(item.createdAt),
     statusLabel: item.direction === "outbound" ? sendStatusLabel(item.status) : item.readAt ? "已读" : "未读",
     statusTone: failed ? "danger" : delivered ? "success" : "neutral",
     attachments: item.attachments.map((attachment) => {
       const assetUrl = localAssetByIdUrl(attachment.assetId, attachmentIdentity);
+      const messageUrl = attachment.source === "wechat_work_kf"
+        ? localConversationAttachmentUrl(item.conversationId, item.id, attachment.id, attachmentIdentity)
+        : "";
+      const href = assetUrl || messageUrl;
       return {
         id: attachment.id,
         name: attachment.name,
         kind: attachment.kind,
-        detail: attachment.mimeType || attachment.status,
-        href: assetUrl || undefined,
-        previewUrl: attachment.kind === "image" && assetUrl ? assetUrl : undefined,
+        detail: formatTimelineAttachmentDetail(attachment),
+        sizeLabel: formatAttachmentSize(attachment.sizeBytes),
+        href: href || undefined,
+        previewUrl: attachment.kind === "image" && href ? href : undefined,
       };
     }),
   };
+}
+
+function formatTimelineAttachmentDetail(attachment: ConversationTimelineItem["attachments"][number]) {
+  const statusLabels: Record<string, string> = {
+    manual_review: "需要人工查看",
+    failed: "读取失败",
+    blocked: "已拦截",
+    queued: "待发送",
+    sending: "发送中",
+  };
+  return statusLabels[attachment.status] || attachment.mimeType || undefined;
 }
 
 function attentionScore(conversation: Conversation, operations?: ConversationOperations) {

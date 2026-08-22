@@ -25,6 +25,18 @@ test("modular shell leaves the feature page as the single visible title owner", 
   assert.match(shell, /ref=\{active \? activeModuleLinkRef : undefined\}/);
 });
 
+test("Zhenxi removes redundant module tabs and keeps internal setup read-only", () => {
+  const shell = read("apps/web/src/app/modular-workbench-shell.tsx");
+  const settings = read("apps/web/src/features/design/design-settings-page.tsx");
+  const internalStatus = read("apps/web/src/features/design/design-internal-connection-status.tsx");
+
+  assert.match(shell, /siblingRoutes\.length > 1 && route\.sectionId !== "design-platform-config"/);
+  assert.doesNotMatch(shell, /DesignPlatformNavigation|designConnectionRoutes/);
+  assert.match(settings, /isInternalWorkspaceReadiness/);
+  assert.match(internalStatus, /data-view-mode="internal-workspace-status"/);
+  assert.match(internalStatus, /授权与连接由内置工作台自动管理，无需额外配置/);
+});
+
 test("overview has one page title and no duplicate quick-action surface", () => {
   const page = read("apps/web/src/features/overview/overview-page.tsx");
   const overview = read("apps/web/src/components/operations-overview.tsx");

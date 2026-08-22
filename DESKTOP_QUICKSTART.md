@@ -1,12 +1,43 @@
 # Desktop Startup Quickstart
 
+## Daily Startup
+
+For normal local use, only use these three files from the project root:
+
+```bat
+启动智能客服.cmd
+停止智能客服.cmd
+检查智能客服.cmd
+```
+
+Double click `启动智能客服.cmd`. It stops old managed services, resets local
+development mode, starts the web/API/mock design services on `3100/3200/3700`,
+and opens the desktop window.
+
+If the desktop window does not appear, open:
+
+```text
+http://127.0.0.1:3100/overview
+```
+
+Default local development mode uses the mock design platform:
+
+```text
+DESIGN_PLATFORM_ADAPTER=standard_v1
+DESIGN_PLATFORM_BASE_URL=http://127.0.0.1:3700
+```
+
+Only use `run_desktop_real_design.bat` after the real design platform is already
+running on `http://127.0.0.1:3000`. Older English launch files are compatibility
+wrappers or diagnostics, not the daily entry.
+
 This project now has a desktop customer service app under:
 
 ```text
 desktop/
 ```
 
-Use these files from the project root:
+Compatibility files from the project root:
 
 ```bat
 run_desktop.bat
@@ -23,22 +54,18 @@ check_desktop_real_design.bat
 Double click:
 
 ```bat
-run_desktop.bat
+启动智能客服.cmd
 ```
 
 The launcher will:
 
 1. Check Node.js and npm.
 2. Install dependencies on the first run if `desktop\node_modules` is missing.
-3. Clean old desktop service processes from ports `3100`, `3200`, and `3700`.
-4. Run a foreground preflight check. Ports `3100`, `3200`, and `3700` must be
-   free before the app starts.
-5. Build the NestJS API.
-6. Start the web workbench, API, and mock design platform in one foreground
-   window.
-
-Keep the startup window open while using the app. Closing that window stops the
-local web/API/mock services.
+3. Stop old managed desktop service processes from ports `3100`, `3200`, and
+   `3700`.
+4. Start the web workbench, API, and mock design platform in managed background
+   mode.
+5. Open the desktop window at `http://127.0.0.1:3100/overview`.
 
 Default startup always uses the local mock design platform:
 
@@ -75,15 +102,15 @@ DESIGN_PLATFORM_BASE_URL=http://127.0.0.1:3000
 ```
 
 If you switch between default mode and real design mode, run
-`stop_desktop.bat` first, then start the mode you want.
+`停止智能客服.cmd` first, then start the mode you want.
 
 ## Service URLs
 
 ```text
-Customer workbench:      http://127.0.0.1:3100/
+Customer workbench:      http://127.0.0.1:3100/overview
 NestJS API health:       http://127.0.0.1:3200/api/health
 Mock design health:      http://127.0.0.1:3700/v1/health
-Runtime logs:            desktop\.runtime\logs
+Runtime logs:            desktop\.runtime-stable\logs
 ```
 
 ## Stop
@@ -91,7 +118,7 @@ Runtime logs:            desktop\.runtime\logs
 Double click:
 
 ```bat
-stop_desktop.bat
+停止智能客服.cmd
 ```
 
 It will request Administrator permission automatically when Windows needs it
@@ -103,7 +130,7 @@ Double click this when the browser cannot open the app, or when a port looks
 wrong:
 
 ```bat
-check_desktop.bat
+检查智能客服.cmd
 ```
 
 It prints Node.js and npm versions, launcher records, port owners, service
@@ -124,52 +151,30 @@ and confirms the ports are free again.
 
 ## Repair Default Startup
 
-Double click this when the app does not open after a normal start, or after
-switching between default mode and real design mode:
-
-```bat
-repair_desktop.bat
-```
-
-It runs this sequence:
-
-```text
-stop old desktop services
-check default mock-mode ports
-build the API
-```
-
-It requests Administrator permission automatically when Windows needs it to stop
-occupied ports.
-
-After repair finishes, run:
-
-```bat
-run_desktop.bat
-```
-
-The app itself should run from `run_desktop.bat`, because that keeps the web,
-API, and mock design platform in one foreground window.
+`启动智能客服.cmd` already performs the normal repair/start sequence: it stops
+old managed services, resets default local mode, starts the managed runtime, and
+opens the desktop window. Use `检查智能客服.cmd` only when startup still fails and
+you need the diagnostic output.
 
 ## Mode Mismatch
 
 Default stable mode uses the mock design platform on port `3700`.
 Real design platform mode uses your real design app on port `3000`.
 
-If `check_desktop.bat` reports a design integration adapter or base URL
+If `检查智能客服.cmd` reports a design integration adapter or base URL
 mismatch, do this:
 
 ```text
 Use the app without the real design platform:
-  run repair_desktop.bat
+  run 启动智能客服.cmd
 
 Use the real design platform:
   start the real design platform first
-  run stop_desktop.bat
+  run 停止智能客服.cmd
   run run_desktop_real_design.bat
 ```
 
-If port `3200` is occupied by the wrong mode, run `stop_desktop.bat`, approve
+If port `3200` is occupied by the wrong mode, run `停止智能客服.cmd`, approve
 the Administrator prompt, then start the mode you want again. That port is the
 API service and it must be restarted when changing modes.
 
@@ -235,6 +240,6 @@ npm.cmd run data:reset
 3700 = mock design platform
 ```
 
-If one of these ports is blocked, run `stop_desktop.bat` first. If it still
+If one of these ports is blocked, run `停止智能客服.cmd` first. If it still
 fails, close the listed PID in Task Manager or run the stop file as
 administrator.

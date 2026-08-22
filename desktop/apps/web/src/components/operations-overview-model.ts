@@ -55,6 +55,7 @@ export type OverviewLaunchItem = {
   phaseLabel: string;
   ownerLabel: string;
   action: string;
+  onClick: () => void;
 };
 
 export type OperationsOverviewProps = {
